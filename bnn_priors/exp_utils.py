@@ -513,14 +513,22 @@ class HDF5Metrics(HDF5ModelSaver):
 
     def _scrub_cache(self):
         for v in self._cache.values():
-            v[:] = np.nan
+            # v[:] = np.nan
+            try:
+                v[:] = np.nan
+            except ValueError:
+                v[:] = -1
 
     def _append(self, name, value, dtype):
         try:
             arr = self._cache[name]
         except KeyError:
             arr = self._cache[name] = np.empty(self.chunk_size, dtype=dtype)
-            arr[:] = np.nan
+            # arr[:] = np.nan
+            try:
+                arr[:] = np.nan
+            except ValueError:
+                arr[:] = -1
         arr[self._chunk_i] = value
 
     def flush(self, every_s=0):

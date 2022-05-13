@@ -25,6 +25,7 @@ class MNIST:
         dataset_dir = f'{_ROOT}/mnist/'
         
         # load data
+        download=True
         data_train = torchvision.datasets.MNIST(dataset_dir, download=download, train=True)
         data_test = torchvision.datasets.MNIST(dataset_dir, download=download, train=False)
 
