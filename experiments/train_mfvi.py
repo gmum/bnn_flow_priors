@@ -14,16 +14,6 @@ from bnn_priors import exp_utils
 from bnn_priors.data import Synthetic
 from bnn_priors.exp_utils import get_model
 
-logging.basicConfig(
-    format=(
-        '[%(levelname)s:%(process)d %(module)s:%(lineno)d %(asctime)s] ' '%(message)s'
-    ),
-    level=logging.INFO,
-    handlers=[logging.StreamHandler()],
-    force=True,
-)
-logging.info('Configured logging.')
-
 if t.cuda.is_available():
     t.backends.cudnn.benchmark = True
 
@@ -92,7 +82,7 @@ def config():
     # learning rate
     lr = 0.001
     # epochs
-    n_epochs = 50
+    n_epochs = 100
     # initialization method for the network weights
     init_method = "he"
     # previous samples to be loaded to initialize the chain
@@ -157,22 +147,18 @@ def evaluate_model(model, dataloader_test, samples):
 @ex.automain
 def main(model, width, depth, weight_prior, weight_loc, weight_scale, bias_prior, bias_loc, bias_scale, \
          batchnorm, weight_prior_params, bias_prior_params, load_samples, init_method, batch_size, lr, \
-         n_epochs, n_samples, n_samples_training):
+         n_epochs, n_samples, n_samples_training, _run, _log):
     data = get_data()
     x_train = data.norm.train_X
     y_train = data.norm.train_y
     x_test = data.norm.test_X
     y_test = data.norm.test_y
-
     # model
     model = get_model(x_train, y_train, model,
                       width, depth,
                       weight_prior, weight_loc, weight_scale,
                       bias_prior, bias_loc, bias_scale,
                       batchnorm, weight_prior_params, bias_prior_params)
-
-    model.to(device("try_cuda"))
-
     # init
     if load_samples is None:
         if init_method == "he":
@@ -190,21 +176,22 @@ def main(model, width, depth, weight_prior, weight_loc, weight_scale, bias_prior
         model_sd = model.state_dict()
         for k in state_dict.keys():
             if k not in model_sd:
-                logging.warning(f"key {k} not in model, ignoring")
+                _log.warning(f"key {k} not in model, ignoring")
                 del state_dict[k]
             elif model_sd[k].size() != state_dict[k].size():
-                logging.warning(f"key {k} size mismatch, model={model_sd[k].size()}, loaded={state_dict[k].size()}")
+                _log.warning(f"key {k} size mismatch, model={model_sd[k].size()}, loaded={state_dict[k].size()}")
                 state_dict[k] = model_sd[k]
 
         missing_keys = set(model_sd.keys()) - set(state_dict.keys())
-        logging.warning(f"The following keys were not found in loaded state dict: {missing_keys}")
+        _log.warning(f"The following keys were not found in loaded state dict: {missing_keys}")
         model_sd.update(state_dict)
         model.load_state_dict(model_sd)
         del state_dict
         del model_sd
+    model.to(device("try_cuda"))
 
-    logging.info(f'{load_samples=}')
-    logging.info(f'{init_method=}')
+    _log.info(f'{load_samples=}')
+    _log.info(f'{init_method=}')
 
     # if save_samples:
     #     model_saver_fn = (lambda: exp_utils.HDF5ModelSaver(
@@ -269,7 +256,6 @@ def main(model, width, depth, weight_prior, weight_loc, weight_scale, bias_prior
     # sample_epochs = n_samples * skip // cycles
     # n_samples = sample_epochs*cycles-skip_first
     n_samples = n_samples
-    logging.info(f"before-training evaluation using n_samples={n_samples}")
 
     qs, posterior_samples = sample_posterior(n_samples)
     prior_samples = {name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()}
@@ -281,59 +267,58 @@ def main(model, width, depth, weight_prior, weight_loc, weight_scale, bias_prior
     optimizer = t.optim.Adam(optimized_parameters, lr=lr)
 
     # train
+    current_step = 0
+    max_step = n_epochs * len(dataloader)
     learn_distributions = True
-    for e in range(n_epochs):
-        logging.info(f'Begin epoch: {e}')
-
-        total_log_likelihood, total_log_prior, total_entropy = 0., 0., 0.
+    for epoch in range(n_epochs):
+        _run.progress = current_step / max_step
+        # print(f'Epoch {epoch}')
         for x, y in dataloader:
-            optimizer.zero_grad()
-
+            x = x.to(device("try_cuda"))
+            y = y.to(device("try_cuda"))
             # sampling from approximate posterior
             qs, posterior_samples = sample_posterior(n_samples_training, only_pointwise_locs=not learn_distributions)
             prior_samples = {name: buffer.repeat(n_samples_training) for name, buffer in model.named_buffers()}
-
-            log_likelihood, log_prior, entropy = 0., 0., 0.
+            #
+            log_likelihood, log_prior, entropy = t.tensor(0., device=device('try_cuda')), \
+                                                 t.tensor(0., device=device('try_cuda')), \
+                                                 t.tensor(0., device=device('try_cuda'))
             for sample_i, sample in enumerate(sample_iter({**posterior_samples, **prior_samples})):
                 # model.load_state_dict(sample, strict=True)
                 overwrite_params(model, sample)
-
                 # likelihood:
                 # preds = model(x)
                 # log_likelihood += preds.log_prob(y).sum() * x_train.shape[0]/x.shape[0]
                 log_likelihood += model.log_likelihood(x, y, x_train.shape[0])  # ???
-
                 if learn_distributions:
                     # priors:
                     log_prior += model.log_prior()
-
                     # entropy:
                     # entropy += sum( q.entropy().sum() for q in qs.values() ) # closed-form for Gaussian
                     entropy += sum(
                         -q.log_prob(s).sum() for q, s in zip(qs.values(), posterior_samples.values()))  # via samples
-
             elbo = log_likelihood + log_prior + entropy
+            _run.log_scalar('train.log_likelihood', log_likelihood.item(), current_step)
+            _run.log_scalar('train.log_prior', log_prior.item(), current_step)
+            _run.log_scalar('train.entropy', entropy.item(), current_step)
             loss_vi = -elbo
+            _run.log_scalar('train.loss', loss_vi.item(), current_step)
+            optimizer.zero_grad()
             loss_vi.backward()
             optimizer.step()
-
-            total_log_likelihood += log_likelihood
-            total_log_prior += log_prior
-            total_entropy += entropy
-
-        total_loss_vi = -total_log_likelihood - total_log_prior - total_entropy
-        logging.info(
-            f"epoch={e} loss_vi={total_loss_vi: .0f} (lik:{total_log_likelihood:.0f} prior:{total_log_prior:.0f} entropy:{total_entropy:.0f})")
-        if e % 10 == 0 and e > 0:
+            current_step += 1
+        if epoch % 10 == 0 and epoch > 0:
             qs, posterior_samples = sample_posterior(n_samples)
             prior_samples = {name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()}
-            logging.info(evaluate_model(model, dataloader_test, {**posterior_samples, **prior_samples}))
-
+            results = evaluate_model(model, dataloader_test, {**posterior_samples, **prior_samples})
+            for k, v in results.items():
+                _run.log_scalar(f'eval.{k}', v, current_step)
     # TODO save as (sacred) artifact if possible?
     # save model
     # TODO add unique run names?
     state = model.state_dict()
     run_dir = Path.cwd() / 'runs'
+    run_dir.mkdir(parents=True, exist_ok=True)
     state_path = run_dir / 'model.pth'
     t.save(state, state_path)
-    logging.info(f'Saved state to local path {str(state_path)}')
+    _log.info(f'Saved state to local path {str(state_path)}')
