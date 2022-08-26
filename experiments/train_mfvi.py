@@ -286,7 +286,10 @@ def main():
         max_step = n_epochs * len(dataloader)
         learn_distributions = True
         for epoch in range(n_epochs):
-            _run.progress = current_step / max_step
+            progress = current_step / max_step
+            _run.progress = progress
+            # also logged, so it is visible in neptune
+            _run.log_scalar('progress', progress, current_step)
             # print(f'Epoch {epoch}')
             for x, y in dataloader:
                 x = x.to(device("try_cuda"))
