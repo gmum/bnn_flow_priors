@@ -171,3 +171,7 @@ experiments/mnist_covariances_l1.pdf
 experiments/mnist_covariances_l2.pdf
 experiments/opt_states.pkl.gz
 experiments/opt_states_rbf.pkl.gz
+
+
+#
+user.env

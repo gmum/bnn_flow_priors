@@ -1,46 +1,16 @@
 #!/bin/bash
-#SBATCH --job-name=effbench
-#SBATCH --qos=big
+#SBATCH --job-name=bnn_flow
+#SBATCH --qos=normal
 #SBATCH --gres=gpu:1
 #SBATCH --mem-per-gpu=20G
-#SBATCH --cpus-per-gpu=20
+#SBATCH --cpus-per-gpu=10
 
 # singularity path - update if needed
-export SIF_PATH=/shared/sets/singularity/bnn_priors.sif
-export PYTHONPATH=$PYTHONPATH:$HOME/bnn_flow_priors
+source user.env
+cd $PROJECT_PATH || exit
+export PYTHONPATH=$PYTHONPATH:$PROJECT_PATH
 
-singularity exec --nv $SIF_PATH python experiments/train_mfvi.py
-
-
-#logdir='../results/my_exp_cifar'
-#data="cifar10"
-#model="googleresnet"
-#
-#priors=( improper gaussian laplace student-t convcorrnormal )
-#scales=( 1.41 )
-#temps=( 0.001 0.01 0.03 0.1 0.3 1.0 )
-#lr=0.01
-#num_cycles=60
-#lengthscales=( 0.5 1.0 )
-#
-#
-#for i in {1..5} # 5 replicates for the error bars
-#do
-#    for prior in "${priors[@]}"
-#    do
-#        for scale in "${scales[@]}"
-#        do
-#            for temp in "${temps[@]}"
-#            do
-#                if [[ $prior == "convcorrnormal" ]]; then
-#                    for lengthscale in "${lengthscales[@]}"
-#                    do
-#                        python train_bnn.py with weight_prior=$prior data=$data inference=VerletSGLDReject model=correlated$model warmup=45 burnin=0 skip=1 n_samples=300 lr=$lr momentum=0.994 weight_scale=$scale cycles=$num_cycles batch_size=128 temperature=$temp save_samples=True progressbar=False log_dir=$logdir batchnorm=True weight_prior_params.lengthscale=$lengthscale
-#                    done
-#                else
-#                    python train_bnn.py with weight_prior=$prior data=$data inference=VerletSGLDReject model=$model warmup=45 burnin=0 skip=1 n_samples=300 lr=$lr momentum=0.994 weight_scale=$scale cycles=$num_cycles batch_size=128 temperature=$temp save_samples=True progressbar=False log_dir=$logdir batchnorm=True
-#                fi
-#            done
-#        done
-#    done
-#done
+# mfvi with different priors
+for prior in gaussian laplace student-t convcorrnormal; do
+  singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train_mfvi.py with weight_prior=$prior bias_prior=$prior
+done
