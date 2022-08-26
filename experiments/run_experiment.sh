@@ -11,6 +11,6 @@ cd $PROJECT_PATH || exit
 export PYTHONPATH=$PYTHONPATH:$PROJECT_PATH
 
 # mfvi with different priors
-for prior in gaussian laplace student-t convcorrnormal; do
+for prior in laplace student-t convcorrnormal gaussian; do
   singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train_mfvi.py with weight_prior=$prior bias_prior=$prior
 done

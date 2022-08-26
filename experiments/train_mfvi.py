@@ -339,7 +339,7 @@ def main():
         _log.info(f'Saved state to local path {str(state_path)}')
 
     # run
-    ex.run()
+    ex.run_commandline()
     # log artifacts
     # TODO uncomment if models are to be uploaded to neptune/mongodb etc.
     ex.add_artifact(str(state_path))
