@@ -20,9 +20,9 @@ class CIFAR10:
     cifar10.norm.train
     ```
     """
-    def __init__(self, dtype='float32', device="cpu", download=False):
+    def __init__(self, dtype='float32', device="cpu", download=True):
         _ROOT = os.path.abspath(os.path.dirname(__file__))
-        dataset_dir = f'{_ROOT}/cifar10/'
+        dataset_dir = f'{os.environ["CIFAR10_PATH"]}'
         self.dtype = dtype
         self.device = device
         
@@ -121,11 +121,11 @@ class SVHN(CIFAR10):
     svhn.norm.train
     ```
     """
-    def __init__(self, dtype='float32', device="cpu", download=False):
+    def __init__(self, dtype='float32', device="cpu", download=True):
         super().__init__(dtype, device)
         _ROOT = os.path.abspath(os.path.dirname(__file__))
-        dataset_dir = f'{_ROOT}/svhn/'
-        
+        dataset_dir = f'{os.environ["SVHN_PATH"]}'
+
         # load data
         data_train = torchvision.datasets.SVHN(root=dataset_dir, download=download, split="train")
         data_test = torchvision.datasets.SVHN(root=dataset_dir, download=download, split="test")

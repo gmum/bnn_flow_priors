@@ -15,6 +15,7 @@ from torch.nn.functional import softplus
 
 from bnn_priors import exp_utils
 from bnn_priors.data import Synthetic
+from bnn_priors.exp_utils import evaluate_ood
 
 
 def main():
@@ -36,7 +37,8 @@ def main():
     @ex.config
     def config():
         # the dataset to be trained on, e.g., "mnist", "cifar10", "UCI_boston"
-        data = "mnist"
+        # data = "mnist"
+        data = "cifar10"
         # model to be used, e.g., "classificationdensenet", "classificationconvnet", "googleresnet"
         model = "classificationconvnet"
         # width of the model (might not have an effect in some models)
@@ -109,6 +111,8 @@ def main():
         progressbar = True
         # a random unique ID for the run
         run_id = uuid.uuid4().hex
+        # OOD dataset
+        ood_data = 'svhn'
 
     # decorators
     device = ex.capture(exp_utils.device)
@@ -143,24 +147,20 @@ def main():
             return exp_utils.get_data(data, device())
 
     @ex.capture
-    def evaluate_model(model, dataloader_test, samples):
-        return exp_utils.evaluate_model(
+    def evaluate_model(model, dataloader_test, samples, calibration=False, dataloader_ood=None):
+        # TODO add OOD evaluation here
+        results = exp_utils.evaluate_model(
             model=model, dataloader_test=dataloader_test, samples=samples,
             likelihood_eval=True, accuracy_eval=True,
-            calibration_eval=False)
-
-    # add OOD evaluation here
-    @ex.capture
-    def final_evaluate_model(model, dataloader_test, samples):
-        return exp_utils.evaluate_model(
-            model=model, dataloader_test=dataloader_test, samples=samples,
-            likelihood_eval=True, accuracy_eval=True,
-            calibration_eval=True)
+            calibration_eval=calibration)
+        if dataloader_ood is not None:
+            results.update(evaluate_ood(model, dataloader_test, dataloader_ood, samples))
+        return results
 
     @ex.main
     def main(model, width, depth, weight_prior, weight_loc, weight_scale, bias_prior, bias_loc, bias_scale, \
              batchnorm, weight_prior_params, bias_prior_params, load_samples, init_method, batch_size, lr, \
-             n_epochs, n_samples, n_samples_training, _run, _log):
+             n_epochs, n_samples, n_samples_training, ood_data, _run, _log):
         # TODO add unique run names?
 
         data = get_data()
@@ -288,10 +288,11 @@ def main():
         for epoch in range(n_epochs):
             progress = current_step / max_step
             _run.progress = progress
-            # also logged, so it is visible in neptune
-            _run.log_scalar('progress', progress, current_step)
             # print(f'Epoch {epoch}')
             for x, y in dataloader:
+                # also logged, so it is visible in neptune
+                if current_step % 100 == 0:
+                    _run.log_scalar('progress', progress, current_step)
                 x = x.to(device("try_cuda"))
                 y = y.to(device("try_cuda"))
                 # sampling from approximate posterior
@@ -337,6 +338,18 @@ def main():
         state = model.state_dict()
         t.save(state, state_path)
         _log.info(f'Saved state to local path {str(state_path)}')
+        # TODO possibly save samples in h5 file as they do in eval_bnn.py
+        # note they also have sample rejection step
+        # final post-training evaluation
+        qs, posterior_samples = sample_posterior(n_samples)
+        prior_samples = {name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()}
+        # ood dataset loader
+        ood_data = get_data(ood_data)
+        dataloader_ood = t.utils.data.DataLoader(ood_data.norm.test, batch_size=batch_size)
+        results = evaluate_model(model, dataloader_test, {**posterior_samples, **prior_samples}, calibration=True,
+                                 dataloader_ood=dataloader_ood)
+        for k, v in results.items():
+            _run.log_scalar(f'final_eval.{k}', v, current_step)
 
     # run
     ex.run_commandline()
