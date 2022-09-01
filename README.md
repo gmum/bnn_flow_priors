@@ -83,7 +83,7 @@ CIFAR10:
 ```sh
 python train_bnn.py with data=cifar10_augmented model=googleresnet weight_prior=gaussian inference=VerletSGLDReject warmup=45 burnin=0 skip=1 n_samples=300 lr=0.01 momentum=0.994 weight_scale=1.41 cycles=60 batch_size=128 temperature=1.0 save_samples=True progressbar=False log_dir=../results/exp_cifar batchnorm=True
 ```
-
+ 
 To run these experiments with different priors and temperatures, such that tempering curves similar to the ones in the paper can be plotted, one can use the bash script `experiments/run_experiment.sh`.
 
 ### Evaluating the trained models
