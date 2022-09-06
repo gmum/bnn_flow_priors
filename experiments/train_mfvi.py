@@ -7,6 +7,7 @@ from pathlib import Path
 
 import neptune.new as neptune
 import torch as t
+from neptune.new.integrations.python_logger import NeptuneHandler
 from neptune.new.integrations.sacred import NeptuneObserver
 from sacred import Experiment
 from sacred.utils import apply_backspaces_and_linefeeds
@@ -19,19 +20,33 @@ from bnn_priors.exp_utils import evaluate_ood
 
 
 def main():
+    # setup torch
     if t.cuda.is_available():
         t.backends.cudnn.benchmark = True
-    # setup local paths
-    # TODO verify
-    run_dir = Path(os.environ['PROJECT_PATH']) / 'runs'
-    run_dir.mkdir(parents=True, exist_ok=True)
-    state_path = run_dir / 'model.pth'
     # setup neptune
-    neptune_run = neptune.init(source_files='**/.py')
+    neptune_run = neptune.init(source_files=['*.py', '**/*.py'])
+    neptune_run_id = neptune_run['sys/id'].fetch()
+    # setup local paths
+    run_dir = Path(os.environ['PROJECT_PATH']) / 'runs' / neptune_run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    state_path = run_dir / 'state.pth'
+    logs_path = run_dir / 'run.log'
+    # setup logging
+    logger = logging.getLogger('myLogger')
+    formatter = logging.Formatter('[%(asctime)s %(levelname)s %(module)s:%(lineno)d] %(message)s')
+    file_handler = logging.FileHandler(logs_path)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    neptune_handler = NeptuneHandler(run=neptune_run)
+    neptune_handler.setFormatter(formatter)
+    logger.addHandler(neptune_handler)
+    logger.setLevel(logging.INFO)
+    logger.info(f'Created logger')
     # setup sacred
     ex = Experiment("mfvi_training")
     ex.captured_out_filter = apply_backspaces_and_linefeeds
     ex.observers.append(NeptuneObserver(run=neptune_run))
+    ex.logger = logger
 
     # config
     @ex.config
@@ -40,6 +55,7 @@ def main():
         # data = "mnist"
         data = "cifar10"
         # model to be used, e.g., "classificationdensenet", "classificationconvnet", "googleresnet"
+        # model = "googleresnet"
         model = "classificationconvnet"
         # width of the model (might not have an effect in some models)
         width = 50
@@ -118,7 +134,7 @@ def main():
     device = ex.capture(exp_utils.device)
     get_model = ex.capture(exp_utils.get_model)
 
-    logging.info(f'Device: {device("try_cuda")}')
+    logger.info(f'Device: {device("try_cuda")}')
 
     # dataset = bnn_priors_data.MNIST(device=device("try_cuda"), download=True)
 
@@ -161,7 +177,7 @@ def main():
     def main(model, width, depth, weight_prior, weight_loc, weight_scale, bias_prior, bias_loc, bias_scale, \
              batchnorm, weight_prior_params, bias_prior_params, load_samples, init_method, batch_size, lr, \
              n_epochs, n_samples, n_samples_training, ood_data, _run, _log):
-        # TODO add unique run names?
+        _log.info(f'Starting {neptune_run_id}')
 
         data = get_data()
         x_train = data.norm.train_X
@@ -291,6 +307,7 @@ def main():
             # print(f'Epoch {epoch}')
             for x, y in dataloader:
                 # also logged, so it is visible in neptune
+                progress = current_step / max_step
                 if current_step % 100 == 0:
                     _run.log_scalar('progress', progress, current_step)
                 x = x.to(device("try_cuda"))
