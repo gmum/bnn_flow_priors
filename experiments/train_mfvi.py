@@ -3,6 +3,7 @@ import logging
 import os
 import uuid
 import warnings
+from itertools import chain
 from pathlib import Path
 
 import neptune.new as neptune
@@ -195,7 +196,6 @@ def main():
              batchnorm, weight_prior_params, bias_prior_params, load_samples, init_method, batch_size, lr,
              n_epochs, schedule, n_samples, n_samples_training, ood_data, _run, _log):
         _log.info(f'Starting {neptune_run_id}')
-
         data = get_data()
         x_train = data.norm.train_X
         y_train = data.norm.train_y
@@ -242,7 +242,6 @@ def main():
                         f"key {k} size mismatch, model={model_sd[k].size()}, loaded={state_dict[k].size()}"
                     )
                     state_dict[k] = model_sd[k]
-
             missing_keys = set(model_sd.keys()) - set(state_dict.keys())
             _log.warning(
                 f"The following keys were not found in loaded state dict: {missing_keys}"
@@ -267,13 +266,11 @@ def main():
         # MFVI approx posterior:
         # locs   = {n: t.randn((p.shape), requires_grad=True, device=device(0)) for n, p in model.named_parameters() }
         locs = {
-            n: t.tensor(
-                (p.cpu().detach().numpy()), requires_grad=True, device=device(0)
-            )
+            n: p.clone().detach().requires_grad_(True)
             for n, p in model.named_parameters()
         }
         scales = {
-            n: t.randn((p.shape), requires_grad=True, device=device(0))
+            n: t.randn_like(p).requires_grad_(True)
             for n, p in model.named_parameters()
         }
 
@@ -282,42 +279,36 @@ def main():
                 n: Normal(l, softplus(s) + 1e-8)
                 for (n, l), s in zip(locs.items(), scales.values())
             }
-
             if only_pointwise_locs:  # for point-wise training simply return repeated locs as samples:
                 samples = {
-                    n: l.repeat(t.Size([n_samples] + [1 for _ in l.shape]))
+                    n: l.expand(t.Size([n_samples] + [-1 for _ in l.shape]))
                     for n, l in locs.items()
                 }
             else:  # for reparametrized gradients:
                 samples = {
-                    name: q.rsample(t.Size([n_samples])) for name, q in qs.items()
+                    n: q.rsample(t.Size([n_samples])) for n, q in qs.items()
                 }
-
             return qs, samples
 
-        approximation_params = list(locs.values()) + list(scales.values())
+        approximation_params = chain(locs.values(), scales.values())
 
         def overwrite_params(module, samples, path="", skip_biases=False):
             for name, m in module._modules.items():
                 overwrite_params(
-                    m, samples, path=path + "." + name, skip_biases=skip_biases
+                    m, samples, path=f"{path}.{name}", skip_biases=skip_biases
                 )
-
-            for name, p in module._parameters.items():
+            for name in module._parameters.keys():
                 if skip_biases and "bias" in name:
                     continue
-                sample_path = (path + "." + name)[1:]  # skip the leading dot
+                sample_path = f"{path}.{name}"[1:]  # skip the leading dot
                 new_value = samples[sample_path]
                 # assert new_value.shape == module._parameters[name].shape, f"sample_path={sample_path} shape={new_value.shape} current shape={module._parameters[name].shape}"
                 module._parameters[name] = new_value
-
             return module
 
         # iterate over samples (taken from the original code)
-
-        def _n_samples_dict(samples):
+        def _n_samples_len(samples):
             n_samples = min(len(v) for _, v in samples.items())
-
             if not all((len(v) == n_samples) for _, v in samples.items()):
                 warnings.warn(
                     "Not all samples have the same length. "
@@ -326,8 +317,8 @@ def main():
             return n_samples
 
         def sample_iter(samples):
-            for i in range(_n_samples_dict(samples)):
-                yield dict((k, v[i]) for k, v in samples.items())
+            for i in range(_n_samples_len(samples)):
+                yield {k: v[i] for k, v in samples.items()}
 
         num_workers = (
             0 if isinstance(data.norm.train, t.utils.data.TensorDataset) else 2
@@ -347,47 +338,35 @@ def main():
             num_workers=num_workers,
         )
 
-        # evaluate before training
-        # sample_epochs = n_samples * skip // cycles
-        # n_samples = sample_epochs*cycles-skip_first
-        n_samples = n_samples
-
-        qs, posterior_samples = sample_posterior(n_samples)
-        prior_samples = {
-            name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()
-        }
-
-        samples = {**posterior_samples, **prior_samples}
-        evaluate_model(model, dataloader_test, samples)
-
-
         batches_per_epoch = len(dataloader)
         last_step = n_epochs * batches_per_epoch - 1
-        optimized_parameters = approximation_params
-        optimizer = t.optim.Adam(optimized_parameters, lr=lr)
+        optimizer = t.optim.Adam(approximation_params, lr=lr)
         if schedule == 'cosine':
             scheduler = t.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=last_step)
         else:
             scheduler = None
+        learn_distributions = True
+
         # train
         current_step = 0
-        learn_distributions = True
+        qs, posterior_samples = sample_posterior(n_samples)
+        prior_samples = {
+            name: buffer.expand(n_samples, *buffer.size()[1:]) for name, buffer in model.named_buffers()
+        }
+        results = evaluate_model(model, dataloader_test, {**posterior_samples, **prior_samples})
+        for k, v in results.items():
+            _run.log_scalar(f"eval.{k}", v, current_step)
         for epoch in range(n_epochs):
-            progress = current_step / last_step
-            _run.progress = progress
             for x, y in dataloader:
-                # also logged, so it is visible in neptune
-                progress = current_step / last_step
                 if current_step % 1000 == 0:
-                    _run.log_scalar("progress", progress, current_step)
-                x = x.to(device("try_cuda"))
-                y = y.to(device("try_cuda"))
+                    _run.log_scalar("progress", current_step / last_step, current_step)
+                x, y = x.to(device("try_cuda")), y.to(device("try_cuda"))
                 # sampling from approximate posterior
                 qs, posterior_samples = sample_posterior(
                     n_samples_training, only_pointwise_locs=not learn_distributions
                 )
                 prior_samples = {
-                    name: buffer.repeat(n_samples_training)
+                    name: buffer.expand(n_samples_training, *buffer.size()[1:])
                     for name, buffer in model.named_buffers()
                 }
                 #
@@ -433,7 +412,7 @@ def main():
             if epoch % 10 == 0 and epoch > 0:
                 qs, posterior_samples = sample_posterior(n_samples)
                 prior_samples = {
-                    name: buffer.repeat(n_samples)
+                    name: buffer.expand(n_samples, *buffer.size()[1:])
                     for name, buffer in model.named_buffers()
                 }
                 results = evaluate_model(
@@ -441,18 +420,18 @@ def main():
                 )
                 for k, v in results.items():
                     _run.log_scalar(f"eval.{k}", v, current_step)
-        _run.progress = 1.0
         _run.log_scalar("progress", 1.0, current_step)
         # save model
         state = model.state_dict()
         t.save(state, state_path)
         _log.info(f"Saved state to local path {str(state_path)}")
         # TODO possibly save samples in h5 file as they do in eval_bnn.py
-        # note they also have sample rejection step
+        # note that they also have sample rejection step
         # final post-training evaluation
         qs, posterior_samples = sample_posterior(n_samples)
         prior_samples = {
-            name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()
+            name: buffer.expand(n_samples, *buffer.size()[1:])
+            for name, buffer in model.named_buffers()
         }
         # ood dataset loader
         dataloader_ood = t.utils.data.DataLoader(
