@@ -34,11 +34,12 @@ def main():
     # setup logging
     logger = logging.getLogger('myLogger')
     formatter = logging.Formatter('[%(asctime)s %(levelname)s %(module)s:%(lineno)d] %(message)s')
+    neptune_formatter = logging.Formatter('%(levelname)s %(module)s:%(lineno)d - %(message)s')
     file_handler = logging.FileHandler(logs_path)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     neptune_handler = NeptuneHandler(run=neptune_run)
-    neptune_handler.setFormatter(formatter)
+    neptune_handler.setFormatter(neptune_formatter)
     logger.addHandler(neptune_handler)
     logger.setLevel(logging.INFO)
     logger.info(f'Created logger')
@@ -52,8 +53,7 @@ def main():
     @ex.config
     def config():
         # the dataset to be trained on, e.g., "mnist", "cifar10", "UCI_boston"
-        # data = "mnist"
-        data = "cifar10"
+        data = "mnist"
         # model to be used, e.g., "classificationdensenet", "classificationconvnet", "googleresnet"
         # model = "googleresnet"
         model = "classificationconvnet"
@@ -68,7 +68,7 @@ def main():
         # location parameter for the weight prior
         weight_loc = 0.0
         # scale parameter for the weight prior
-        weight_scale = 2.0**0.5
+        weight_scale = 2.0 ** 0.5
         # location parameter for the bias prior
         bias_loc = 0.0
         # scale parameter for the bias prior
@@ -109,6 +109,8 @@ def main():
         lr = 0.001
         # epochs
         n_epochs = 100
+        # scheduler type to use
+        schedule = None
         # initialization method for the network weights
         init_method = "he"
         # previous samples to be loaded to initialize the chain
@@ -128,7 +130,7 @@ def main():
         # a random unique ID for the run
         run_id = uuid.uuid4().hex
         # OOD dataset
-        ood_data = "svhn"
+        ood_data = None
 
     # decorators
     device = ex.capture(exp_utils.device)
@@ -171,7 +173,7 @@ def main():
 
     @ex.capture
     def evaluate_model(
-        model, dataloader_test, samples, calibration=False, dataloader_ood=None
+            model, dataloader_test, samples, calibration=False, dataloader_ood=None
     ):
         # TODO add OOD evaluation here
         results = exp_utils.evaluate_model(
@@ -189,9 +191,9 @@ def main():
         return results
 
     @ex.main
-    def main(model, width, depth, weight_prior, weight_loc, weight_scale, bias_prior, bias_loc, bias_scale, \
-             batchnorm, weight_prior_params, bias_prior_params, load_samples, init_method, batch_size, lr, \
-             n_epochs, n_samples, n_samples_training, ood_data, _run, _log):
+    def main(model, width, depth, weight_prior, weight_loc, weight_scale, bias_prior, bias_loc, bias_scale,
+             batchnorm, weight_prior_params, bias_prior_params, load_samples, init_method, batch_size, lr,
+             n_epochs, schedule, n_samples, n_samples_training, ood_data, _run, _log):
         _log.info(f'Starting {neptune_run_id}')
 
         data = get_data()
@@ -281,9 +283,7 @@ def main():
                 for (n, l), s in zip(locs.items(), scales.values())
             }
 
-            if (
-                only_pointwise_locs
-            ):  # for point-wise training simply return repeated locs as samples:
+            if only_pointwise_locs:  # for point-wise training simply return repeated locs as samples:
                 samples = {
                     n: l.repeat(t.Size([n_samples] + [1 for _ in l.shape]))
                     for n, l in locs.items()
@@ -360,21 +360,25 @@ def main():
         samples = {**posterior_samples, **prior_samples}
         evaluate_model(model, dataloader_test, samples)
 
+
+        batches_per_epoch = len(dataloader)
+        last_step = n_epochs * batches_per_epoch - 1
         optimized_parameters = approximation_params
         optimizer = t.optim.Adam(optimized_parameters, lr=lr)
-
+        if schedule == 'cosine':
+            scheduler = t.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=last_step)
+        else:
+            scheduler = None
         # train
         current_step = 0
-        max_step = n_epochs * len(dataloader)
         learn_distributions = True
         for epoch in range(n_epochs):
-            progress = current_step / max_step
+            progress = current_step / last_step
             _run.progress = progress
-            # print(f'Epoch {epoch}')
             for x, y in dataloader:
                 # also logged, so it is visible in neptune
-                progress = current_step / max_step
-                if current_step % 100 == 0:
+                progress = current_step / last_step
+                if current_step % 1000 == 0:
                     _run.log_scalar("progress", progress, current_step)
                 x = x.to(device("try_cuda"))
                 y = y.to(device("try_cuda"))
@@ -393,7 +397,7 @@ def main():
                     t.tensor(0.0, device=device("try_cuda")),
                 )
                 for sample_i, sample in enumerate(
-                    sample_iter({**posterior_samples, **prior_samples})
+                        sample_iter({**posterior_samples, **prior_samples})
                 ):
                     # model.load_state_dict(sample, strict=True)
                     overwrite_params(model, sample)
@@ -423,6 +427,8 @@ def main():
                 optimizer.zero_grad()
                 loss_vi.backward()
                 optimizer.step()
+                if scheduler is not None:
+                    scheduler.step()
                 current_step += 1
             if epoch % 10 == 0 and epoch > 0:
                 qs, posterior_samples = sample_posterior(n_samples)
@@ -435,6 +441,8 @@ def main():
                 )
                 for k, v in results.items():
                     _run.log_scalar(f"eval.{k}", v, current_step)
+        _run.progress = 1.0
+        _run.log_scalar("progress", 1.0, current_step)
         # save model
         state = model.state_dict()
         t.save(state, state_path)
@@ -447,10 +455,9 @@ def main():
             name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()
         }
         # ood dataset loader
-        ood_data = get_data(ood_data)
         dataloader_ood = t.utils.data.DataLoader(
-            ood_data.norm.test, batch_size=batch_size
-        )
+            get_data(ood_data).norm.test, batch_size=batch_size
+        ) if ood_data is not None else None
         results = evaluate_model(
             model,
             dataloader_test,

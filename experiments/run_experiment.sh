@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=bnn_flow
-#SBATCH --qos=normal
-#SBATCH --gres=gpu:2
+#SBATCH --qos=big
+#SBATCH --gres=gpu:4
 #SBATCH --mem-per-gpu=20G
 #SBATCH --cpus-per-gpu=10
 
@@ -14,9 +14,13 @@ export PYTHONPATH=$PYTHONPATH:$PROJECT_PATH
 #for prior in improper gaussian laplace student-t convcorrnormal; do
 for prior in gaussian; do
   for lr in 0.1 0.01 0.001 0.0001; do
-#  for lr in 0.001; do
+    #  for lr in 0.001; do
+    # MNIST
+#    srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train_mfvi.py with lr=$lr \
+#      weight_prior=$prior bias_prior=$prior n_epochs=100 data=mnist &
+    # CIFAR
     srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train_mfvi.py with lr=$lr \
-      weight_prior=$prior bias_prior=$prior n_epochs=150 &
+      weight_prior=$prior bias_prior=$prior n_epochs=500 schedule=cosine data=cifar10 ood_data=svhn &
   done
 done
 wait
