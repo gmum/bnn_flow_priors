@@ -66,13 +66,13 @@ def main():
         # bias prior, same as above
         bias_prior = "gaussian"
         # location parameter for the weight prior
-        weight_loc = 0.
+        weight_loc = 0.0
         # scale parameter for the weight prior
-        weight_scale = 2. ** 0.5
+        weight_scale = 2.0**0.5
         # location parameter for the bias prior
-        bias_loc = 0.
+        bias_loc = 0.0
         # scale parameter for the bias prior
-        bias_scale = 1.
+        bias_scale = 1.0
         # additional keyword arguments for the weight prior
         weight_prior_params = {}
         # additional keyword arguments for the bias prior
@@ -128,7 +128,7 @@ def main():
         # a random unique ID for the run
         run_id = uuid.uuid4().hex
         # OOD dataset
-        ood_data = 'svhn'
+        ood_data = "svhn"
 
     # decorators
     device = ex.capture(exp_utils.device)
@@ -153,9 +153,16 @@ def main():
             dataset = get_data(data)
             x_train = dataset.norm.train_X
             y_train = dataset.norm.train_y
-            model = get_model(x_train=x_train, y_train=y_train, weight_prior=prior, weight_prior_params={})
+            model = get_model(
+                x_train=x_train,
+                y_train=y_train,
+                weight_prior=prior,
+                weight_prior_params={},
+            )
             model.sample_all_priors()
-            data = Synthetic(dataset=dataset, model=model, batch_size=batch_size, device=device())
+            data = Synthetic(
+                dataset=dataset, model=model, batch_size=batch_size, device=device()
+            )
             t.save(data, exp_utils.sneaky_artifact(_run, "synthetic_data.pt"))
             t.save(model, exp_utils.sneaky_artifact(_run, "true_model.pt"))
             return data
@@ -163,14 +170,22 @@ def main():
             return exp_utils.get_data(data, device())
 
     @ex.capture
-    def evaluate_model(model, dataloader_test, samples, calibration=False, dataloader_ood=None):
+    def evaluate_model(
+        model, dataloader_test, samples, calibration=False, dataloader_ood=None
+    ):
         # TODO add OOD evaluation here
         results = exp_utils.evaluate_model(
-            model=model, dataloader_test=dataloader_test, samples=samples,
-            likelihood_eval=True, accuracy_eval=True,
-            calibration_eval=calibration)
+            model=model,
+            dataloader_test=dataloader_test,
+            samples=samples,
+            likelihood_eval=True,
+            accuracy_eval=True,
+            calibration_eval=calibration,
+        )
         if dataloader_ood is not None:
-            results.update(evaluate_ood(model, dataloader_test, dataloader_ood, samples))
+            results.update(
+                evaluate_ood(model, dataloader_test, dataloader_ood, samples)
+            )
         return results
 
     @ex.main
@@ -185,11 +200,22 @@ def main():
         x_test = data.norm.test_X
         y_test = data.norm.test_y
         # model
-        model = get_model(x_train, y_train, model,
-                          width, depth,
-                          weight_prior, weight_loc, weight_scale,
-                          bias_prior, bias_loc, bias_scale,
-                          batchnorm, weight_prior_params, bias_prior_params)
+        model = get_model(
+            x_train,
+            y_train,
+            model,
+            width,
+            depth,
+            weight_prior,
+            weight_loc,
+            weight_scale,
+            bias_prior,
+            bias_loc,
+            bias_scale,
+            batchnorm,
+            weight_prior_params,
+            bias_prior_params,
+        )
         # init
         if load_samples is None:
             if init_method == "he":
@@ -210,19 +236,23 @@ def main():
                     _log.warning(f"key {k} not in model, ignoring")
                     del state_dict[k]
                 elif model_sd[k].size() != state_dict[k].size():
-                    _log.warning(f"key {k} size mismatch, model={model_sd[k].size()}, loaded={state_dict[k].size()}")
+                    _log.warning(
+                        f"key {k} size mismatch, model={model_sd[k].size()}, loaded={state_dict[k].size()}"
+                    )
                     state_dict[k] = model_sd[k]
 
             missing_keys = set(model_sd.keys()) - set(state_dict.keys())
-            _log.warning(f"The following keys were not found in loaded state dict: {missing_keys}")
+            _log.warning(
+                f"The following keys were not found in loaded state dict: {missing_keys}"
+            )
             model_sd.update(state_dict)
             model.load_state_dict(model_sd)
             del state_dict
             del model_sd
         model.to(device("try_cuda"))
 
-        _log.info(f'{load_samples=}')
-        _log.info(f'{init_method=}')
+        _log.info(f"load_samples={load_samples}")
+        _log.info(f"init_method={init_method}")
 
         # if save_samples:
         #     model_saver_fn = (lambda: exp_utils.HDF5ModelSaver(
@@ -234,17 +264,34 @@ def main():
 
         # MFVI approx posterior:
         # locs   = {n: t.randn((p.shape), requires_grad=True, device=device(0)) for n, p in model.named_parameters() }
-        locs = {n: t.tensor((p.cpu().detach().numpy()), requires_grad=True, device=device(0)) for n, p in
-                model.named_parameters()}
-        scales = {n: t.randn((p.shape), requires_grad=True, device=device(0)) for n, p in model.named_parameters()}
+        locs = {
+            n: t.tensor(
+                (p.cpu().detach().numpy()), requires_grad=True, device=device(0)
+            )
+            for n, p in model.named_parameters()
+        }
+        scales = {
+            n: t.randn((p.shape), requires_grad=True, device=device(0))
+            for n, p in model.named_parameters()
+        }
 
         def sample_posterior(n_samples, only_pointwise_locs=False):
-            qs = {n: Normal(l, softplus(s) + 1e-8) for (n, l), s in zip(locs.items(), scales.values())}
+            qs = {
+                n: Normal(l, softplus(s) + 1e-8)
+                for (n, l), s in zip(locs.items(), scales.values())
+            }
 
-            if only_pointwise_locs:  # for point-wise training simply return repeated locs as samples:
-                samples = {n: l.repeat(t.Size([n_samples] + [1 for _ in l.shape])) for n, l in locs.items()}
+            if (
+                only_pointwise_locs
+            ):  # for point-wise training simply return repeated locs as samples:
+                samples = {
+                    n: l.repeat(t.Size([n_samples] + [1 for _ in l.shape]))
+                    for n, l in locs.items()
+                }
             else:  # for reparametrized gradients:
-                samples = {name: q.rsample(t.Size([n_samples])) for name, q in qs.items()}
+                samples = {
+                    name: q.rsample(t.Size([n_samples])) for name, q in qs.items()
+                }
 
             return qs, samples
 
@@ -252,10 +299,13 @@ def main():
 
         def overwrite_params(module, samples, path="", skip_biases=False):
             for name, m in module._modules.items():
-                overwrite_params(m, samples, path=path + "." + name, skip_biases=skip_biases)
+                overwrite_params(
+                    m, samples, path=path + "." + name, skip_biases=skip_biases
+                )
 
             for name, p in module._parameters.items():
-                if skip_biases and "bias" in name: continue
+                if skip_biases and "bias" in name:
+                    continue
                 sample_path = (path + "." + name)[1:]  # skip the leading dot
                 new_value = samples[sample_path]
                 # assert new_value.shape == module._parameters[name].shape, f"sample_path={sample_path} shape={new_value.shape} current shape={module._parameters[name].shape}"
@@ -269,19 +319,33 @@ def main():
             n_samples = min(len(v) for _, v in samples.items())
 
             if not all((len(v) == n_samples) for _, v in samples.items()):
-                warnings.warn("Not all samples have the same length. "
-                              "Setting n_samples to the minimum.")
+                warnings.warn(
+                    "Not all samples have the same length. "
+                    "Setting n_samples to the minimum."
+                )
             return n_samples
 
         def sample_iter(samples):
             for i in range(_n_samples_dict(samples)):
                 yield dict((k, v[i]) for k, v in samples.items())
 
-        num_workers = (0 if isinstance(data.norm.train, t.utils.data.TensorDataset) else 2)
-        dataloader = t.utils.data.DataLoader(data.norm.train, batch_size=batch_size, shuffle=True, drop_last=False,
-                                             num_workers=num_workers)
-        dataloader_test = t.utils.data.DataLoader(data.norm.test, batch_size=batch_size, shuffle=False, drop_last=False,
-                                                  num_workers=num_workers)
+        num_workers = (
+            0 if isinstance(data.norm.train, t.utils.data.TensorDataset) else 2
+        )
+        dataloader = t.utils.data.DataLoader(
+            data.norm.train,
+            batch_size=batch_size,
+            shuffle=True,
+            drop_last=False,
+            num_workers=num_workers,
+        )
+        dataloader_test = t.utils.data.DataLoader(
+            data.norm.test,
+            batch_size=batch_size,
+            shuffle=False,
+            drop_last=False,
+            num_workers=num_workers,
+        )
 
         # evaluate before training
         # sample_epochs = n_samples * skip // cycles
@@ -289,7 +353,9 @@ def main():
         n_samples = n_samples
 
         qs, posterior_samples = sample_posterior(n_samples)
-        prior_samples = {name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()}
+        prior_samples = {
+            name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()
+        }
 
         samples = {**posterior_samples, **prior_samples}
         evaluate_model(model, dataloader_test, samples)
@@ -309,64 +375,91 @@ def main():
                 # also logged, so it is visible in neptune
                 progress = current_step / max_step
                 if current_step % 100 == 0:
-                    _run.log_scalar('progress', progress, current_step)
+                    _run.log_scalar("progress", progress, current_step)
                 x = x.to(device("try_cuda"))
                 y = y.to(device("try_cuda"))
                 # sampling from approximate posterior
-                qs, posterior_samples = sample_posterior(n_samples_training,
-                                                         only_pointwise_locs=not learn_distributions)
-                prior_samples = {name: buffer.repeat(n_samples_training) for name, buffer in model.named_buffers()}
+                qs, posterior_samples = sample_posterior(
+                    n_samples_training, only_pointwise_locs=not learn_distributions
+                )
+                prior_samples = {
+                    name: buffer.repeat(n_samples_training)
+                    for name, buffer in model.named_buffers()
+                }
                 #
-                log_likelihood, log_prior, entropy = t.tensor(0., device=device('try_cuda')), \
-                                                     t.tensor(0., device=device('try_cuda')), \
-                                                     t.tensor(0., device=device('try_cuda'))
-                for sample_i, sample in enumerate(sample_iter({**posterior_samples, **prior_samples})):
+                log_likelihood, log_prior, entropy = (
+                    t.tensor(0.0, device=device("try_cuda")),
+                    t.tensor(0.0, device=device("try_cuda")),
+                    t.tensor(0.0, device=device("try_cuda")),
+                )
+                for sample_i, sample in enumerate(
+                    sample_iter({**posterior_samples, **prior_samples})
+                ):
                     # model.load_state_dict(sample, strict=True)
                     overwrite_params(model, sample)
                     # likelihood:
                     # preds = model(x)
                     # log_likelihood += preds.log_prob(y).sum() * x_train.shape[0]/x.shape[0]
-                    log_likelihood += model.log_likelihood(x, y, x_train.shape[0])  # ???
+                    log_likelihood += model.log_likelihood(
+                        x, y, x_train.shape[0]
+                    )  # ???
                     if learn_distributions:
                         # priors:
                         log_prior += model.log_prior()
                         # entropy:
                         # entropy += sum( q.entropy().sum() for q in qs.values() ) # closed-form for Gaussian
                         entropy += sum(
-                            -q.log_prob(s).sum() for q, s in
-                            zip(qs.values(), posterior_samples.values()))  # via samples
+                            -q.log_prob(s).sum()
+                            for q, s in zip(qs.values(), posterior_samples.values())
+                        )  # via samples
                 elbo = log_likelihood + log_prior + entropy
-                _run.log_scalar('train.log_likelihood', log_likelihood.item(), current_step)
-                _run.log_scalar('train.log_prior', log_prior.item(), current_step)
-                _run.log_scalar('train.entropy', entropy.item(), current_step)
+                _run.log_scalar(
+                    "train.log_likelihood", log_likelihood.item(), current_step
+                )
+                _run.log_scalar("train.log_prior", log_prior.item(), current_step)
+                _run.log_scalar("train.entropy", entropy.item(), current_step)
                 loss_vi = -elbo
-                _run.log_scalar('train.loss', loss_vi.item(), current_step)
+                _run.log_scalar("train.loss", loss_vi.item(), current_step)
                 optimizer.zero_grad()
                 loss_vi.backward()
                 optimizer.step()
                 current_step += 1
             if epoch % 10 == 0 and epoch > 0:
                 qs, posterior_samples = sample_posterior(n_samples)
-                prior_samples = {name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()}
-                results = evaluate_model(model, dataloader_test, {**posterior_samples, **prior_samples})
+                prior_samples = {
+                    name: buffer.repeat(n_samples)
+                    for name, buffer in model.named_buffers()
+                }
+                results = evaluate_model(
+                    model, dataloader_test, {**posterior_samples, **prior_samples}
+                )
                 for k, v in results.items():
-                    _run.log_scalar(f'eval.{k}', v, current_step)
+                    _run.log_scalar(f"eval.{k}", v, current_step)
         # save model
         state = model.state_dict()
         t.save(state, state_path)
-        _log.info(f'Saved state to local path {str(state_path)}')
+        _log.info(f"Saved state to local path {str(state_path)}")
         # TODO possibly save samples in h5 file as they do in eval_bnn.py
         # note they also have sample rejection step
         # final post-training evaluation
         qs, posterior_samples = sample_posterior(n_samples)
-        prior_samples = {name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()}
+        prior_samples = {
+            name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()
+        }
         # ood dataset loader
         ood_data = get_data(ood_data)
-        dataloader_ood = t.utils.data.DataLoader(ood_data.norm.test, batch_size=batch_size)
-        results = evaluate_model(model, dataloader_test, {**posterior_samples, **prior_samples}, calibration=True,
-                                 dataloader_ood=dataloader_ood)
+        dataloader_ood = t.utils.data.DataLoader(
+            ood_data.norm.test, batch_size=batch_size
+        )
+        results = evaluate_model(
+            model,
+            dataloader_test,
+            {**posterior_samples, **prior_samples},
+            calibration=True,
+            dataloader_ood=dataloader_ood,
+        )
         for k, v in results.items():
-            _run.log_scalar(f'final_eval.{k}', v, current_step)
+            _run.log_scalar(f"final_eval.{k}", v, current_step)
 
     # run
     ex.run_commandline()
@@ -377,5 +470,5 @@ def main():
     neptune_run.stop()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
