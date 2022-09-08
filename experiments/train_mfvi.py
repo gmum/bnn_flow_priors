@@ -351,7 +351,7 @@ def main():
         current_step = 0
         qs, posterior_samples = sample_posterior(n_samples)
         prior_samples = {
-            name: buffer.expand(n_samples, *buffer.size()[1:]) for name, buffer in model.named_buffers()
+            name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()
         }
         results = evaluate_model(model, dataloader_test, {**posterior_samples, **prior_samples})
         for k, v in results.items():
@@ -366,8 +366,7 @@ def main():
                     n_samples_training, only_pointwise_locs=not learn_distributions
                 )
                 prior_samples = {
-                    name: buffer.expand(n_samples_training, *buffer.size()[1:])
-                    for name, buffer in model.named_buffers()
+                    name: buffer.repeat(n_samples_training) for name, buffer in model.named_buffers()
                 }
                 #
                 log_likelihood, log_prior, entropy = (
@@ -412,8 +411,7 @@ def main():
             if epoch % 10 == 0 and epoch > 0:
                 qs, posterior_samples = sample_posterior(n_samples)
                 prior_samples = {
-                    name: buffer.expand(n_samples, *buffer.size()[1:])
-                    for name, buffer in model.named_buffers()
+                    name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()
                 }
                 results = evaluate_model(
                     model, dataloader_test, {**posterior_samples, **prior_samples}
@@ -430,8 +428,7 @@ def main():
         # final post-training evaluation
         qs, posterior_samples = sample_posterior(n_samples)
         prior_samples = {
-            name: buffer.expand(n_samples, *buffer.size()[1:])
-            for name, buffer in model.named_buffers()
+            name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()
         }
         # ood dataset loader
         dataloader_ood = t.utils.data.DataLoader(
