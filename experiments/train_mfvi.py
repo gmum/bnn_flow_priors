@@ -24,14 +24,17 @@ def main():
     # setup torch
     if t.cuda.is_available():
         t.backends.cudnn.benchmark = True
+
     # setup neptune
     neptune_run = neptune.init(source_files=["*.py", "**/*.py"])
     neptune_run_id = neptune_run["sys/id"].fetch()
+
     # setup local paths
     run_dir = Path(os.environ["PROJECT_PATH"]) / "runs" / neptune_run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     state_path = run_dir / "state.pth"
     logs_path = run_dir / "run.log"
+
     # setup logging
     logger = logging.getLogger("myLogger")
     formatter = logging.Formatter(
@@ -48,6 +51,7 @@ def main():
     logger.addHandler(neptune_handler)
     logger.setLevel(logging.INFO)
     logger.info(f"Created logger")
+
     # setup sacred
     ex = Experiment("mfvi_training")
     ex.captured_out_filter = apply_backspaces_and_linefeeds
@@ -143,8 +147,6 @@ def main():
 
     logger.info(f'Device: {device("try_cuda")}')
 
-    # dataset = bnn_priors_data.MNIST(device=device("try_cuda"), download=True)
-
     @ex.capture
     def get_data(data, batch_size, _run):
         if data == "empty":
@@ -222,11 +224,14 @@ def main():
         _log,
     ):
         _log.info(f"Starting {neptune_run_id}")
+
+        # loading data
         data = get_data()
         x_train = data.norm.train_X
         y_train = data.norm.train_y
         x_test = data.norm.test_X
         y_test = data.norm.test_y
+
         # model
         model = get_model(
             x_train,
@@ -244,6 +249,7 @@ def main():
             weight_prior_params,
             bias_prior_params,
         )
+
         # init
         if load_samples is None:
             if init_method == "he":
@@ -298,6 +304,7 @@ def main():
         scales = {
             n: t.randn_like(p).requires_grad_(True) for n, p in model.named_parameters()
         }
+        approximation_params = chain(locs.values(), scales.values())
 
         def sample_posterior(n_samples, only_pointwise_locs=False):
             qs = {
@@ -315,7 +322,12 @@ def main():
                 samples = {n: q.rsample(t.Size([n_samples])) for n, q in qs.items()}
             return qs, samples
 
-        approximation_params = chain(locs.values(), scales.values())
+        def sample_priors(n_samples):
+            prior_samples = {
+                name: t.cat(n_samples * [buffer[None, ...]])
+                for name, buffer in model.named_buffers()
+            }
+            return prior_samples
 
         def overwrite_params(module, samples, path="", skip_biases=False):
             for name, m in module._modules.items():
@@ -331,7 +343,19 @@ def main():
                 module._parameters[name] = new_value
             return module
 
-        # iterate over samples (taken from the original code)
+        def evaluate_and_store_metrics(current_step, n_samples=100):
+            qs, posterior_samples = sample_posterior(n_samples)
+            prior_samples = sample_priors(n_samples)
+            results = evaluate_model(
+                model, dataloader_test, {**posterior_samples, **prior_samples}
+            )
+            for k, v in results.items():
+                _run.log_scalar(f"eval.{k}", v, current_step)
+                logging.info(
+                    f"[evaluate_and_store_metrics][step={current_step}] eval.{k}={v}"
+                )
+
+        # iterate over samples (taken from the original code):
         def _n_samples_len(samples):
             n_samples = min(len(v) for _, v in samples.items())
             if not all((len(v) == n_samples) for _, v in samples.items()):
@@ -345,6 +369,7 @@ def main():
             for i in range(_n_samples_len(samples)):
                 yield {k: v[i] for k, v in samples.items()}
 
+        # Prepare data loaders
         num_workers = (
             0 if isinstance(data.norm.train, t.utils.data.TensorDataset) else 2
         )
@@ -363,6 +388,7 @@ def main():
             num_workers=num_workers,
         )
 
+        # configure optimization
         batches_per_epoch = len(dataloader)
         last_step = n_epochs * batches_per_epoch - 1
         optimizer = t.optim.Adam(approximation_params, lr=lr)
@@ -372,33 +398,24 @@ def main():
             )
         else:
             scheduler = None
-        learn_distributions = True
 
         # train
         current_step = 0
-        qs, posterior_samples = sample_posterior(n_samples)
-        prior_samples = {
-            name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()
-        }
-        results = evaluate_model(
-            model, dataloader_test, {**posterior_samples, **prior_samples}
-        )
-        for k, v in results.items():
-            _run.log_scalar(f"eval.{k}", v, current_step)
+        learn_distributions = True  # TODO make it configurable
+        evaluate_and_store_metrics(current_step, n_samples)
         for epoch in range(n_epochs):
             for x, y in dataloader:
                 if current_step % 1000 == 0:
                     _run.log_scalar("progress", current_step / last_step, current_step)
                 x, y = x.to(device("try_cuda")), y.to(device("try_cuda"))
+
                 # sampling from approximate posterior
                 qs, posterior_samples = sample_posterior(
                     n_samples_training, only_pointwise_locs=not learn_distributions
                 )
-                prior_samples = {
-                    name: buffer.repeat(n_samples_training)
-                    for name, buffer in model.named_buffers()
-                }
-                #
+                prior_samples = sample_priors(n_samples_training)
+
+                # sum up estimates for ELBO parts
                 log_likelihood, log_prior, entropy = (
                     t.tensor(0.0, device=device("try_cuda")),
                     t.tensor(0.0, device=device("try_cuda")),
@@ -407,48 +424,47 @@ def main():
                 for sample_i, sample in enumerate(
                     sample_iter({**posterior_samples, **prior_samples})
                 ):
-                    # model.load_state_dict(sample, strict=True)
-                    overwrite_params(model, sample)
+                    overwrite_params(
+                        model, sample
+                    )  # model.load_state_dict(sample, strict=True)
+
                     # likelihood:
-                    # preds = model(x)
-                    # log_likelihood += preds.log_prob(y).sum() * x_train.shape[0]/x.shape[0]
                     log_likelihood += model.log_likelihood(
                         x, y, x_train.shape[0]
-                    )  # ???
+                    )  # preds = model(x); log_likelihood += preds.log_prob(y).sum() * x_train.shape[0]/x.shape[0]
+
                     if learn_distributions:
+
                         # priors:
                         log_prior += model.log_prior()
+
                         # entropy:
                         # entropy += sum( q.entropy().sum() for q in qs.values() ) # closed-form for Gaussian
                         entropy += sum(
                             -q.log_prob(s).sum()
                             for q, s in zip(qs.values(), posterior_samples.values())
                         )  # via samples
+
                 elbo = log_likelihood + log_prior + entropy
+                loss_vi = -elbo
+
                 _run.log_scalar(
                     "train.log_likelihood", log_likelihood.item(), current_step
                 )
                 _run.log_scalar("train.log_prior", log_prior.item(), current_step)
                 _run.log_scalar("train.entropy", entropy.item(), current_step)
-                loss_vi = -elbo
                 _run.log_scalar("train.loss", loss_vi.item(), current_step)
+
                 optimizer.zero_grad()
                 loss_vi.backward()
                 optimizer.step()
+
                 if scheduler is not None:
                     scheduler.step()
                 current_step += 1
             if epoch % 10 == 0 and epoch > 0:
-                qs, posterior_samples = sample_posterior(n_samples)
-                prior_samples = {
-                    name: buffer.repeat(n_samples)
-                    for name, buffer in model.named_buffers()
-                }
-                results = evaluate_model(
-                    model, dataloader_test, {**posterior_samples, **prior_samples}
-                )
-                for k, v in results.items():
-                    _run.log_scalar(f"eval.{k}", v, current_step)
+                evaluate_and_store_metrics(current_step, n_samples)
+
         _run.log_scalar("progress", 1.0, current_step)
         # save model
         state = model.state_dict()
