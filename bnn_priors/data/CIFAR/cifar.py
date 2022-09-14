@@ -21,7 +21,6 @@ class CIFAR10:
     ```
     """
     def __init__(self, dtype='float32', device="cpu", download=True):
-        _ROOT = os.path.abspath(os.path.dirname(__file__))
         dataset_dir = f'{os.environ["CIFAR10_PATH"]}'
         self.dtype = dtype
         self.device = device
@@ -123,7 +122,6 @@ class SVHN(CIFAR10):
     """
     def __init__(self, dtype='float32', device="cpu", download=True):
         super().__init__(dtype, device)
-        _ROOT = os.path.abspath(os.path.dirname(__file__))
         dataset_dir = f'{os.environ["SVHN_PATH"]}'
 
         # load data
@@ -135,8 +133,7 @@ class SVHN(CIFAR10):
 
 class CIFAR10Augmented:
     def __init__(self, dtype='float32', device="cpu", download=False):
-        _ROOT = os.path.abspath(os.path.dirname(__file__))
-        dataset_dir = f'{_ROOT}/cifar10/'
+        dataset_dir = f'{os.environ["CIFAR10_PATH"]}'
         dtype = getattr(t, dtype)
         self.dtype = dtype
         self.device = device

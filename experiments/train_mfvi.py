@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import uuid
 import warnings
 from itertools import chain
 from pathlib import Path
@@ -77,7 +76,7 @@ def main():
         # location parameter for the weight prior
         weight_loc = 0.0
         # scale parameter for the weight prior
-        weight_scale = 2.0**0.5
+        weight_scale = 2.0 ** 0.5
         # location parameter for the bias prior
         bias_loc = 0.0
         # scale parameter for the bias prior
@@ -94,30 +93,12 @@ def main():
         n_samples = 100
         # total number of samples for training
         n_samples_training = 1
-        # number of learning rate cycles for the Markov chain (see https://arxiv.org/abs/1902.03932)
-        cycles = 3  # 60
-        # number of epochs per cycle without added Langevin noise
-        burnin = 0
-        # number of epochs per cycle with added noise, but without sampling
-        warmup = 45
-        # number of epochs to skip between taking samples (1 means no skipping)
-        skip = 1
         # number of epochs to skip between computing metrics
         metrics_skip = 10
-        # number of first samples to discard when evaluating them
-        skip_first = 50  # for evaluating accuracy et al at the end
-        # temperature of the sampler
-        temperature = 1.0
-        # learning rate schedule during sampling
-        sampling_decay = "cosine"
-        # momentum for the sampler
-        momentum = 0.994
-        # update factor for the preconditioner
-        precond_update = 1
         # learning rate
         lr = 0.001
         # epochs
-        n_epochs = 100
+        epochs = 100
         # scheduler type to use
         schedule = None
         # initialization method for the network weights
@@ -126,20 +107,17 @@ def main():
         load_samples = None
         # batch size for the training
         batch_size = 128
-        # whether to use Metropolis-Hastings rejection steps (works only with some integrators)
-        reject_samples = False
         # whether to use batch normalization
         batchnorm = True
         # device to use, "cpu", "cuda:0", "try_cuda"
         device = "try_cuda"
         # whether the samples should be saved
+        # TODO implement?
         save_samples = True
-        # whether a progressbar should be plotted to stdout during the training
-        progressbar = True
-        # a random unique ID for the run
-        run_id = uuid.uuid4().hex
         # OOD dataset
         ood_data = None
+        # whether to learn distributions (leaves only log likelihood loss)
+        learn_distributions = True
 
     # decorators
     device = ex.capture(exp_utils.device)
@@ -178,50 +156,33 @@ def main():
         else:
             return exp_utils.get_data(data, device())
 
-    @ex.capture
-    def evaluate_model(
-        model, dataloader_test, samples, calibration=False, dataloader_ood=None
-    ):
-        # TODO add OOD evaluation here
-        results = exp_utils.evaluate_model(
-            model=model,
-            dataloader_test=dataloader_test,
-            samples=samples,
-            likelihood_eval=True,
-            accuracy_eval=True,
-            calibration_eval=calibration,
-        )
-        if dataloader_ood is not None:
-            results.update(
-                evaluate_ood(model, dataloader_test, dataloader_ood, samples)
-            )
-        return results
-
     @ex.main
     def main(
-        model,
-        width,
-        depth,
-        weight_prior,
-        weight_loc,
-        weight_scale,
-        bias_prior,
-        bias_loc,
-        bias_scale,
-        batchnorm,
-        weight_prior_params,
-        bias_prior_params,
-        load_samples,
-        init_method,
-        batch_size,
-        lr,
-        n_epochs,
-        schedule,
-        n_samples,
-        n_samples_training,
-        ood_data,
-        _run,
-        _log,
+            model,
+            width,
+            depth,
+            weight_prior,
+            weight_loc,
+            weight_scale,
+            bias_prior,
+            bias_loc,
+            bias_scale,
+            batchnorm,
+            weight_prior_params,
+            bias_prior_params,
+            load_samples,
+            init_method,
+            batch_size,
+            lr,
+            epochs,
+            schedule,
+            learn_distributions,
+            n_samples,
+            n_samples_training,
+            ood_data,
+            metrics_skip,
+            _run,
+            _log,
     ):
         _log.info(f"Starting {neptune_run_id}")
 
@@ -312,7 +273,7 @@ def main():
                 for (n, l), s in zip(locs.items(), scales.values())
             }
             if (
-                only_pointwise_locs
+                    only_pointwise_locs
             ):  # for point-wise training simply return repeated locs as samples:
                 samples = {
                     n: l.expand(t.Size([n_samples] + [-1 for _ in l.shape]))
@@ -343,17 +304,30 @@ def main():
                 module._parameters[name] = new_value
             return module
 
-        def evaluate_and_store_metrics(current_step, n_samples=100):
+        def evaluate_and_store_metrics(current_step, n_samples=100, calib=True, ood=False):
+            training = model.training
+            model.eval()
             qs, posterior_samples = sample_posterior(n_samples)
             prior_samples = sample_priors(n_samples)
-            results = evaluate_model(
-                model, dataloader_test, {**posterior_samples, **prior_samples}
+            samples = {**posterior_samples, **prior_samples}
+            results = exp_utils.evaluate_model(
+                model=model,
+                dataloader_test=dataloader_test,
+                samples=samples,
+                likelihood_eval=True,
+                accuracy_eval=True,
+                calibration_eval=calib,
             )
+            if dataloader_ood is not None and ood:
+                results.update(
+                    evaluate_ood(model, dataloader_test, dataloader_ood, samples)
+                )
             for k, v in results.items():
                 _run.log_scalar(f"eval.{k}", v, current_step)
-                logging.info(
+                _log.info(
                     f"[evaluate_and_store_metrics][step={current_step}] eval.{k}={v}"
                 )
+            model.train(training)
 
         # iterate over samples (taken from the original code):
         def _n_samples_len(samples):
@@ -387,10 +361,15 @@ def main():
             drop_last=False,
             num_workers=num_workers,
         )
+        dataloader_ood = (
+            t.utils.data.DataLoader(get_data(ood_data).norm.test, batch_size=batch_size)
+            if ood_data is not None
+            else None
+        )
 
         # configure optimization
         batches_per_epoch = len(dataloader)
-        last_step = n_epochs * batches_per_epoch - 1
+        last_step = epochs * batches_per_epoch - 1
         optimizer = t.optim.Adam(approximation_params, lr=lr)
         if schedule == "cosine":
             scheduler = t.optim.lr_scheduler.CosineAnnealingLR(
@@ -401,9 +380,8 @@ def main():
 
         # train
         current_step = 0
-        learn_distributions = True  # TODO make it configurable
         evaluate_and_store_metrics(current_step, n_samples)
-        for epoch in range(n_epochs):
+        for epoch in range(epochs):
             for x, y in dataloader:
                 if current_step % 1000 == 0:
                     _run.log_scalar("progress", current_step / last_step, current_step)
@@ -422,7 +400,7 @@ def main():
                     t.tensor(0.0, device=device("try_cuda")),
                 )
                 for sample_i, sample in enumerate(
-                    sample_iter({**posterior_samples, **prior_samples})
+                        sample_iter({**posterior_samples, **prior_samples})
                 ):
                     overwrite_params(
                         model, sample
@@ -434,7 +412,6 @@ def main():
                     )  # preds = model(x); log_likelihood += preds.log_prob(y).sum() * x_train.shape[0]/x.shape[0]
 
                     if learn_distributions:
-
                         # priors:
                         log_prior += model.log_prior()
 
@@ -462,7 +439,7 @@ def main():
                 if scheduler is not None:
                     scheduler.step()
                 current_step += 1
-            if epoch % 10 == 0 and epoch > 0:
+            if epoch % metrics_skip == 0 and epoch > 0:
                 evaluate_and_store_metrics(current_step, n_samples)
 
         _run.log_scalar("progress", 1.0, current_step)
@@ -471,27 +448,8 @@ def main():
         t.save(state, state_path)
         _log.info(f"Saved state to local path {str(state_path)}")
         # TODO possibly save samples in h5 file as they do in eval_bnn.py
-        # note that they also have sample rejection step
-        # final post-training evaluation
-        qs, posterior_samples = sample_posterior(n_samples)
-        prior_samples = {
-            name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()
-        }
-        # ood dataset loader
-        dataloader_ood = (
-            t.utils.data.DataLoader(get_data(ood_data).norm.test, batch_size=batch_size)
-            if ood_data is not None
-            else None
-        )
-        results = evaluate_model(
-            model,
-            dataloader_test,
-            {**posterior_samples, **prior_samples},
-            calibration=True,
-            dataloader_ood=dataloader_ood,
-        )
-        for k, v in results.items():
-            _run.log_scalar(f"final_eval.{k}", v, current_step)
+        # final evaluation
+        evaluate_and_store_metrics(current_step, n_samples, ood=True)
 
     # run
     ex.run_commandline()
