@@ -25,17 +25,21 @@ def main():
     if t.cuda.is_available():
         t.backends.cudnn.benchmark = True
     # setup neptune
-    neptune_run = neptune.init(source_files=['*.py', '**/*.py'])
-    neptune_run_id = neptune_run['sys/id'].fetch()
+    neptune_run = neptune.init(source_files=["*.py", "**/*.py"])
+    neptune_run_id = neptune_run["sys/id"].fetch()
     # setup local paths
-    run_dir = Path(os.environ['PROJECT_PATH']) / 'runs' / neptune_run_id
+    run_dir = Path(os.environ["PROJECT_PATH"]) / "runs" / neptune_run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    state_path = run_dir / 'state.pth'
-    logs_path = run_dir / 'run.log'
+    state_path = run_dir / "state.pth"
+    logs_path = run_dir / "run.log"
     # setup logging
-    logger = logging.getLogger('myLogger')
-    formatter = logging.Formatter('[%(asctime)s %(levelname)s %(module)s:%(lineno)d] %(message)s')
-    neptune_formatter = logging.Formatter('%(levelname)s %(module)s:%(lineno)d - %(message)s')
+    logger = logging.getLogger("myLogger")
+    formatter = logging.Formatter(
+        "[%(asctime)s %(levelname)s %(module)s:%(lineno)d] %(message)s"
+    )
+    neptune_formatter = logging.Formatter(
+        "%(levelname)s %(module)s:%(lineno)d - %(message)s"
+    )
     file_handler = logging.FileHandler(logs_path)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
@@ -43,7 +47,7 @@ def main():
     neptune_handler.setFormatter(neptune_formatter)
     logger.addHandler(neptune_handler)
     logger.setLevel(logging.INFO)
-    logger.info(f'Created logger')
+    logger.info(f"Created logger")
     # setup sacred
     ex = Experiment("mfvi_training")
     ex.captured_out_filter = apply_backspaces_and_linefeeds
@@ -69,7 +73,7 @@ def main():
         # location parameter for the weight prior
         weight_loc = 0.0
         # scale parameter for the weight prior
-        weight_scale = 2.0 ** 0.5
+        weight_scale = 2.0**0.5
         # location parameter for the bias prior
         bias_loc = 0.0
         # scale parameter for the bias prior
@@ -174,7 +178,7 @@ def main():
 
     @ex.capture
     def evaluate_model(
-            model, dataloader_test, samples, calibration=False, dataloader_ood=None
+        model, dataloader_test, samples, calibration=False, dataloader_ood=None
     ):
         # TODO add OOD evaluation here
         results = exp_utils.evaluate_model(
@@ -192,10 +196,32 @@ def main():
         return results
 
     @ex.main
-    def main(model, width, depth, weight_prior, weight_loc, weight_scale, bias_prior, bias_loc, bias_scale,
-             batchnorm, weight_prior_params, bias_prior_params, load_samples, init_method, batch_size, lr,
-             n_epochs, schedule, n_samples, n_samples_training, ood_data, _run, _log):
-        _log.info(f'Starting {neptune_run_id}')
+    def main(
+        model,
+        width,
+        depth,
+        weight_prior,
+        weight_loc,
+        weight_scale,
+        bias_prior,
+        bias_loc,
+        bias_scale,
+        batchnorm,
+        weight_prior_params,
+        bias_prior_params,
+        load_samples,
+        init_method,
+        batch_size,
+        lr,
+        n_epochs,
+        schedule,
+        n_samples,
+        n_samples_training,
+        ood_data,
+        _run,
+        _log,
+    ):
+        _log.info(f"Starting {neptune_run_id}")
         data = get_data()
         x_train = data.norm.train_X
         y_train = data.norm.train_y
@@ -270,8 +296,7 @@ def main():
             for n, p in model.named_parameters()
         }
         scales = {
-            n: t.randn_like(p).requires_grad_(True)
-            for n, p in model.named_parameters()
+            n: t.randn_like(p).requires_grad_(True) for n, p in model.named_parameters()
         }
 
         def sample_posterior(n_samples, only_pointwise_locs=False):
@@ -279,15 +304,15 @@ def main():
                 n: Normal(l, softplus(s) + 1e-8)
                 for (n, l), s in zip(locs.items(), scales.values())
             }
-            if only_pointwise_locs:  # for point-wise training simply return repeated locs as samples:
+            if (
+                only_pointwise_locs
+            ):  # for point-wise training simply return repeated locs as samples:
                 samples = {
                     n: l.expand(t.Size([n_samples] + [-1 for _ in l.shape]))
                     for n, l in locs.items()
                 }
             else:  # for reparametrized gradients:
-                samples = {
-                    n: q.rsample(t.Size([n_samples])) for n, q in qs.items()
-                }
+                samples = {n: q.rsample(t.Size([n_samples])) for n, q in qs.items()}
             return qs, samples
 
         approximation_params = chain(locs.values(), scales.values())
@@ -341,8 +366,10 @@ def main():
         batches_per_epoch = len(dataloader)
         last_step = n_epochs * batches_per_epoch - 1
         optimizer = t.optim.Adam(approximation_params, lr=lr)
-        if schedule == 'cosine':
-            scheduler = t.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=last_step)
+        if schedule == "cosine":
+            scheduler = t.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=last_step
+            )
         else:
             scheduler = None
         learn_distributions = True
@@ -353,7 +380,9 @@ def main():
         prior_samples = {
             name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()
         }
-        results = evaluate_model(model, dataloader_test, {**posterior_samples, **prior_samples})
+        results = evaluate_model(
+            model, dataloader_test, {**posterior_samples, **prior_samples}
+        )
         for k, v in results.items():
             _run.log_scalar(f"eval.{k}", v, current_step)
         for epoch in range(n_epochs):
@@ -366,7 +395,8 @@ def main():
                     n_samples_training, only_pointwise_locs=not learn_distributions
                 )
                 prior_samples = {
-                    name: buffer.repeat(n_samples_training) for name, buffer in model.named_buffers()
+                    name: buffer.repeat(n_samples_training)
+                    for name, buffer in model.named_buffers()
                 }
                 #
                 log_likelihood, log_prior, entropy = (
@@ -375,7 +405,7 @@ def main():
                     t.tensor(0.0, device=device("try_cuda")),
                 )
                 for sample_i, sample in enumerate(
-                        sample_iter({**posterior_samples, **prior_samples})
+                    sample_iter({**posterior_samples, **prior_samples})
                 ):
                     # model.load_state_dict(sample, strict=True)
                     overwrite_params(model, sample)
@@ -411,7 +441,8 @@ def main():
             if epoch % 10 == 0 and epoch > 0:
                 qs, posterior_samples = sample_posterior(n_samples)
                 prior_samples = {
-                    name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()
+                    name: buffer.repeat(n_samples)
+                    for name, buffer in model.named_buffers()
                 }
                 results = evaluate_model(
                     model, dataloader_test, {**posterior_samples, **prior_samples}
@@ -431,9 +462,11 @@ def main():
             name: buffer.repeat(n_samples) for name, buffer in model.named_buffers()
         }
         # ood dataset loader
-        dataloader_ood = t.utils.data.DataLoader(
-            get_data(ood_data).norm.test, batch_size=batch_size
-        ) if ood_data is not None else None
+        dataloader_ood = (
+            t.utils.data.DataLoader(get_data(ood_data).norm.test, batch_size=batch_size)
+            if ood_data is not None
+            else None
+        )
         results = evaluate_model(
             model,
             dataloader_test,
