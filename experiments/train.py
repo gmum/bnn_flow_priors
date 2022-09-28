@@ -11,12 +11,14 @@ from neptune.new.integrations.python_logger import NeptuneHandler
 from neptune.new.integrations.sacred import NeptuneObserver
 from sacred import Experiment
 from sacred.utils import apply_backspaces_and_linefeeds
-from torch.distributions import Normal
+from torch.distributions import Normal, MultivariateNormal
+from torch.nn import Sequential, Linear, LeakyReLU, Tanh
 from torch.nn.functional import softplus
 
 from bnn_priors import exp_utils
 from bnn_priors.data import Synthetic
 from bnn_priors.exp_utils import evaluate_ood
+from bnn_priors.flow import RealNVP
 
 
 def main():
@@ -69,6 +71,8 @@ def main():
         width = 50
         # depth of the model (might not have an effect in some models)
         depth = 3
+        # posterior, e.g. "mfvi", "realnvp"
+        posterior = "mfvi"
         # weight prior, e.g., "gaussian", "laplace", "student-t"
         weight_prior = "gaussian"
         # bias prior, same as above
@@ -181,6 +185,7 @@ def main():
             n_samples_training,
             ood_data,
             metrics_skip,
+            posterior,
             _run,
             _log,
     ):
@@ -256,32 +261,65 @@ def main():
         #     def model_saver_fn():
         #         yield None
 
-        # MFVI approx posterior:
-        # locs   = {n: t.randn((p.shape), requires_grad=True, device=device(0)) for n, p in model.named_parameters() }
-        locs = {
-            n: p.clone().detach().requires_grad_(True)
-            for n, p in model.named_parameters()
-        }
-        scales = {
-            n: t.randn_like(p).requires_grad_(True) for n, p in model.named_parameters()
-        }
-        approximation_params = chain(locs.values(), scales.values())
-
-        def sample_posterior(n_samples, only_pointwise_locs=False):
-            qs = {
-                n: Normal(l, softplus(s) + 1e-8)
-                for (n, l), s in zip(locs.items(), scales.values())
+        if posterior == 'mfvi':
+            # MFVI approx posterior:
+            # locs   = {n: t.randn((p.shape), requires_grad=True, device=device(0)) for n, p in model.named_parameters() }
+            locs = {
+                n: p.clone().detach().requires_grad_(True)
+                for n, p in model.named_parameters()
             }
-            if (
-                    only_pointwise_locs
-            ):  # for point-wise training simply return repeated locs as samples:
-                samples = {
-                    n: l.expand(t.Size([n_samples] + [-1 for _ in l.shape]))
-                    for n, l in locs.items()
+            scales = {
+                n: t.randn_like(p).requires_grad_(True) for n, p in model.named_parameters()
+            }
+            approximation_params = chain(locs.values(), scales.values())
+
+            def sample_posterior(n_samples, only_pointwise_locs=False):
+                qs = {
+                    n: Normal(l, softplus(s) + 1e-8)
+                    for (n, l), s in zip(locs.items(), scales.values())
                 }
-            else:  # for reparametrized gradients:
-                samples = {n: q.rsample(t.Size([n_samples])) for n, q in qs.items()}
-            return qs, samples
+                if (
+                        only_pointwise_locs
+                ):  # for point-wise training simply return repeated locs as samples:
+                    samples = {
+                        n: l.expand(t.Size([n_samples] + [-1 for _ in l.shape]))
+                        for n, l in locs.items()
+                    }
+                else:  # for reparametrized gradients:
+                    samples = {n: q.rsample(t.Size([n_samples])) for n, q in qs.items()}
+                return qs, samples
+        elif posterior == 'realnvp':
+            realnvps = {}
+            layer_sizes = {}
+            for n, p in model.named_parameters():
+                layer_sizes[n] = p.size()
+                d = p.numel()
+                # TODO add config entries for these
+                m = 256
+                num_layers = 8
+                flow_prior = MultivariateNormal(t.zeros(d), t.eye(d))
+                net_s = lambda: Sequential(Linear(d // 2, m), LeakyReLU(),
+                                           Linear(m, m), LeakyReLU(),
+                                           Linear(m, d // 2), Tanh())
+                net_t = lambda: Sequential(Linear(d // 2, m), LeakyReLU(),
+                                           Linear(m, m), LeakyReLU(),
+                                           Linear(m, d // 2))
+                realnvps[n] = RealNVP(net_s, net_t, num_layers, flow_prior)
+            approximation_params = chain(m.parameters() for m in realnvps.values())
+
+            def sample_posterior(n_samples):
+                samples = {}
+                nlls = {}
+                for name, realnvp in realnvps.items():
+                    n_weights, nll = realnvp.sample(n_samples, t.prod(layer_sizes[name]), calculate_nll=True)
+                    n_weights = n_weights.reshape(n_samples, *layer_sizes[name])
+                    samples[name] = n_weights
+                    nlls[name] = nll
+                    _log.info(f"RealNVL layer {name} weights size: {layer_sizes[name]}")
+                return nlls, samples
+
+        else:
+            raise ValueError("Illegal 'posterior' value.")
 
         def sample_priors(n_samples):
             prior_samples = {
@@ -307,7 +345,7 @@ def main():
         def evaluate_and_store_metrics(current_step, n_samples=100, calib=True, ood=False):
             training = model.training
             model.eval()
-            qs, posterior_samples = sample_posterior(n_samples)
+            _, posterior_samples = sample_posterior(n_samples)
             prior_samples = sample_priors(n_samples)
             samples = {**posterior_samples, **prior_samples}
             results = exp_utils.evaluate_model(
@@ -388,9 +426,14 @@ def main():
                 x, y = x.to(device("try_cuda")), y.to(device("try_cuda"))
 
                 # sampling from approximate posterior
-                qs, posterior_samples = sample_posterior(
-                    n_samples_training, only_pointwise_locs=not learn_distributions
-                )
+                if posterior == 'mfvi':
+                    qs, posterior_samples = sample_posterior(
+                        n_samples_training, only_pointwise_locs=not learn_distributions
+                    )
+                elif posterior == 'realnvp':
+                    nlls, posterior_samples = sample_posterior(n_samples_training)
+                else:
+                    raise ValueError("Illegal 'posterior' value.")
                 prior_samples = sample_priors(n_samples_training)
 
                 # sum up estimates for ELBO parts
@@ -414,13 +457,20 @@ def main():
                     if learn_distributions:
                         # priors:
                         log_prior += model.log_prior()
-
-                        # entropy:
-                        # entropy += sum( q.entropy().sum() for q in qs.values() ) # closed-form for Gaussian
-                        entropy += sum(
-                            -q.log_prob(s).sum()
-                            for q, s in zip(qs.values(), posterior_samples.values())
-                        )  # via samples
+                        if posterior == 'mfvi':
+                            prior_samples = sample_priors(n_samples_training)
+                            # entropy:
+                            # entropy += sum( q.entropy().sum() for q in qs.values() ) # closed-form for Gaussian
+                            entropy += sum(
+                                -q.log_prob(s).sum()
+                                for q, s in zip(qs.values(), posterior_samples.values())
+                            )  # via samples
+                        elif posterior == 'realnvp':
+                            entropy += sum(
+                                nll.sum() for nll, s in zip(nlls.values(), posterior_samples.values())
+                            )
+                        else:
+                            raise ValueError("Illegal 'posterior' value.")
 
                 elbo = log_likelihood + log_prior + entropy
                 loss_vi = -elbo
