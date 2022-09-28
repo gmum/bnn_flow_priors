@@ -20,12 +20,10 @@ class MNIST:
     mnist.norm.train
     ```
     """
-    def __init__(self, dtype='float32', device="cpu", download=False):
-        _ROOT = os.path.abspath(os.path.dirname(__file__))
-        dataset_dir = f'{_ROOT}/mnist/'
+    def __init__(self, dtype='float32', device="cpu", download=True):
+        dataset_dir = f'{os.environ["MNIST_PATH"]}'
         
         # load data
-        download=True
         data_train = torchvision.datasets.MNIST(dataset_dir, download=download, train=True)
         data_test = torchvision.datasets.MNIST(dataset_dir, download=download, train=False)
 
@@ -124,9 +122,8 @@ class FashionMNIST:
     fmnist.norm.train
     ```
     """
-    def __init__(self, dtype='float32', device="cpu", download=False):
-        _ROOT = os.path.abspath(os.path.dirname(__file__))
-        dataset_dir = f'{_ROOT}/mnist/'
+    def __init__(self, dtype='float32', device="cpu", download=True):
+        dataset_dir = f'{os.environ["FASHION_MNIST_PATH"]}'
         
         # load data
         data_train = torchvision.datasets.FashionMNIST(dataset_dir, download=download, train=True)
