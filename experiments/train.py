@@ -122,6 +122,8 @@ def main():
         ood_data = None
         # whether to learn distributions (leaves only log likelihood loss)
         learn_distributions = True
+        # whether to log sigma statistics
+        log_mfvi = False
 
     # decorators
     device = ex.capture(exp_utils.device)
@@ -186,6 +188,7 @@ def main():
             ood_data,
             metrics_skip,
             posterior,
+            log_mfvi,
             _run,
             _log,
     ):
@@ -295,8 +298,9 @@ def main():
                 layer_sizes[n] = p.size()
                 d = p.numel()
                 # TODO add config entries for these
-                m = 256
-                num_layers = 8
+                m = 128
+                num_layers = 2
+                _log.info(f"RealNVL layer {n} weights size: {d}")
                 flow_prior = MultivariateNormal(t.zeros(d), t.eye(d))
                 net_s = lambda: Sequential(Linear(d // 2, m), LeakyReLU(),
                                            Linear(m, m), LeakyReLU(),
@@ -315,7 +319,6 @@ def main():
                     n_weights = n_weights.reshape(n_samples, *layer_sizes[name])
                     samples[name] = n_weights
                     nlls[name] = nll
-                    _log.info(f"RealNVL layer {name} weights size: {layer_sizes[name]}")
                 return nlls, samples
 
         else:
@@ -342,7 +345,7 @@ def main():
                 module._parameters[name] = new_value
             return module
 
-        def evaluate_and_store_metrics(current_step, n_samples=100, calib=True, ood=False):
+        def evaluate_and_store_metrics(current_step, n_samples, calib=True, ood=False):
             training = model.training
             model.eval()
             _, posterior_samples = sample_posterior(n_samples)
@@ -365,6 +368,26 @@ def main():
                 _log.info(
                     f"[evaluate_and_store_metrics][step={current_step}] eval.{k}={v}"
                 )
+            if log_mfvi is True and posterior == 'mfvi':
+                for name in scales.keys():
+                    l = locs[name]
+                    s = scales[name]
+                    r_s = s / l.abs()
+                    _run.log_scalar(f"mfvi.{name}.miu.min", l.min(), current_step)
+                    _run.log_scalar(f"mfvi.{name}.miu.max", l.max(), current_step)
+                    _run.log_scalar(f"mfvi.{name}.miu.mean", l.mean(), current_step)
+                    _run.log_scalar(f"mfvi.{name}.miu.median", l.median(), current_step)
+                    _run.log_scalar(f"mfvi.{name}.miu.std", l.std(), current_step)
+                    _run.log_scalar(f"mfvi.{name}.sigma.min", s.min(), current_step)
+                    _run.log_scalar(f"mfvi.{name}.sigma.max", s.max(), current_step)
+                    _run.log_scalar(f"mfvi.{name}.sigma.mean", s.mean(), current_step)
+                    _run.log_scalar(f"mfvi.{name}.sigma.median", s.median(), current_step)
+                    _run.log_scalar(f"mfvi.{name}.sigma.std", s.std(), current_step)
+                    _run.log_scalar(f"mfvi.{name}.rel_sigma.min", r_s.min(), current_step)
+                    _run.log_scalar(f"mfvi.{name}.rel_sigma.max", r_s.max(), current_step)
+                    _run.log_scalar(f"mfvi.{name}.rel_sigma.mean", r_s.mean(), current_step)
+                    _run.log_scalar(f"mfvi.{name}.rel_sigma.median", r_s.median(), current_step)
+                    _run.log_scalar(f"mfvi.{name}.rel_sigma.std", r_s.std(), current_step)
             model.train(training)
 
         # iterate over samples (taken from the original code):
