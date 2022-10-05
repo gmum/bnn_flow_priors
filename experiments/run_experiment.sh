@@ -3,7 +3,7 @@
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
 #SBATCH --mem-per-gpu=40G
-#SBATCH --cpus-per-gpu=10
+#SBATCH --cpus-per-gpu=4
 
 # singularity path - update if needed
 source user.env
@@ -11,12 +11,15 @@ cd $PROJECT_PATH || exit
 export PYTHONPATH=$PYTHONPATH:$PROJECT_PATH
 
 # RealNVP posterior test
-#srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
-#    posterior=realnvp \
-#    data=mnist model=classificationconvnet weight_prior=gaussian weight_scale=1.41 bias_prior=gaussian  \
-#    n_samples=1 batch_size=128 lr=0.001 epochs=100 \
-#    ood_data=fashion_mnist save_samples=True &
-#wait
+#for lr in 0.01 0.001 0.0001; do
+for lr in 0.001; do
+  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
+      posterior=realnvp \
+      data=mnist model=classificationconvnet weight_prior=gaussian weight_scale=1.41 bias_prior=gaussian  \
+      n_samples=1 batch_size=128 lr=$lr epochs=100 \
+      ood_data=fashion_mnist save_samples=True &
+  wait
+done
 
 # CIFAR with different priors - same for both weights and biases
 #for prior in gaussian student-t laplace; do
@@ -94,30 +97,30 @@ export PYTHONPATH=$PYTHONPATH:$PROJECT_PATH
 #wait
 
 # MNIST with sigma stats logging
-for seed in 1; do
-  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
-    data=mnist model=classificationconvnet weight_prior=gaussian weight_scale=1.41 bias_prior=gaussian  \
-    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
-    ood_data=fashion_mnist save_samples=True log_mfvi=True &
-
-  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
-    data=mnist model=classificationconvnet weight_prior=laplace weight_scale=1.41 bias_prior=laplace  \
-    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
-    ood_data=fashion_mnist save_samples=True log_mfvi=True &
-
-  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
-    data=mnist model=classificationconvnet weight_prior=laplace weight_scale=1.41 bias_prior=gaussian  \
-    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
-    ood_data=fashion_mnist save_samples=True log_mfvi=True &
-
-  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
-    data=mnist model=classificationconvnet weight_prior=student-t weight_scale=1.41 bias_prior=student-t  \
-    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
-    ood_data=fashion_mnist save_samples=True log_mfvi=True &
-
-  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
-    data=mnist model=classificationconvnet weight_prior=student-t weight_scale=1.41 bias_prior=gaussian  \
-    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
-    ood_data=fashion_mnist save_samples=True log_mfvi=True &
-done
-wait
+#for seed in 1; do
+#  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
+#    data=mnist model=classificationconvnet weight_prior=gaussian weight_scale=1.41 bias_prior=gaussian  \
+#    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
+#    ood_data=fashion_mnist save_samples=True log_mfvi=True &
+#
+#  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
+#    data=mnist model=classificationconvnet weight_prior=laplace weight_scale=1.41 bias_prior=laplace  \
+#    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
+#    ood_data=fashion_mnist save_samples=True log_mfvi=True &
+#
+#  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
+#    data=mnist model=classificationconvnet weight_prior=laplace weight_scale=1.41 bias_prior=gaussian  \
+#    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
+#    ood_data=fashion_mnist save_samples=True log_mfvi=True &
+#
+#  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
+#    data=mnist model=classificationconvnet weight_prior=student-t weight_scale=1.41 bias_prior=student-t  \
+#    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
+#    ood_data=fashion_mnist save_samples=True log_mfvi=True &
+#
+#  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
+#    data=mnist model=classificationconvnet weight_prior=student-t weight_scale=1.41 bias_prior=gaussian  \
+#    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
+#    ood_data=fashion_mnist save_samples=True log_mfvi=True &
+#done
+#wait

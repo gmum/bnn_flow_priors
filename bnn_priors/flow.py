@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+from bnn_priors.exp_utils import device
+
 
 class RealNVP(nn.Module):
     def __init__(self, net_s, net_t, num_layers, prior):
@@ -43,6 +45,7 @@ class RealNVP(nn.Module):
 
     def sample(self, batchSize, D, calculate_nll=False):
         z = self.prior.sample((batchSize,))
+        z = z.to(device("try_cuda"))
         x, log_det_J = self.f_inv(z)
         if calculate_nll:
             log_prob_z = self.prior.log_prob(z)

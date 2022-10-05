@@ -124,6 +124,10 @@ def main():
         learn_distributions = True
         # whether to log sigma statistics
         log_mfvi = False
+        # realnvp posterior settings
+        realnvp_m = 256
+        realnvp_num_layers = 8
+        realnvp_max_input_size = 1024
 
     # decorators
     device = ex.capture(exp_utils.device)
@@ -189,6 +193,9 @@ def main():
             metrics_skip,
             posterior,
             log_mfvi,
+            realnvp_m,
+            realnvp_num_layers,
+            realnvp_max_input_size,
             _run,
             _log,
     ):
@@ -281,9 +288,8 @@ def main():
                     n: Normal(l, softplus(s) + 1e-8)
                     for (n, l), s in zip(locs.items(), scales.values())
                 }
-                if (
-                        only_pointwise_locs
-                ):  # for point-wise training simply return repeated locs as samples:
+                if only_pointwise_locs:
+                    # for point-wise training simply return repeated locs as samples:
                     samples = {
                         n: l.expand(t.Size([n_samples] + [-1 for _ in l.shape]))
                         for n, l in locs.items()
@@ -293,32 +299,38 @@ def main():
                 return qs, samples
         elif posterior == 'realnvp':
             realnvps = {}
-            layer_sizes = {}
+            point_estimates = {}
             for n, p in model.named_parameters():
-                layer_sizes[n] = p.size()
                 d = p.numel()
-                # TODO add config entries for these
-                m = 128
-                num_layers = 2
-                _log.info(f"RealNVL layer {n} weights size: {d}")
-                flow_prior = MultivariateNormal(t.zeros(d), t.eye(d))
-                net_s = lambda: Sequential(Linear(d // 2, m), LeakyReLU(),
-                                           Linear(m, m), LeakyReLU(),
-                                           Linear(m, d // 2), Tanh())
-                net_t = lambda: Sequential(Linear(d // 2, m), LeakyReLU(),
-                                           Linear(m, m), LeakyReLU(),
-                                           Linear(m, d // 2))
-                realnvps[n] = RealNVP(net_s, net_t, num_layers, flow_prior)
-            approximation_params = chain(m.parameters() for m in realnvps.values())
+                _log.info(f"Layer {n} weights size: {d}")
+                if d <= realnvp_max_input_size:
+                    flow_prior = MultivariateNormal(t.zeros(d), t.eye(d))
+                    m = realnvp_m
+                    net_s = lambda: Sequential(Linear(d // 2, m), LeakyReLU(),
+                                               Linear(m, m), LeakyReLU(),
+                                               Linear(m, d // 2), Tanh())
+                    net_t = lambda: Sequential(Linear(d // 2, m), LeakyReLU(),
+                                               Linear(m, m), LeakyReLU(),
+                                               Linear(m, d // 2))
+                    realnvps[n] = RealNVP(net_s, net_t, realnvp_num_layers, flow_prior)
+                    realnvps[n].to(device("try_cuda"))
+                else:
+                    point_estimates[n] = p.clone().detach().unsqueeze(0).requires_grad_(True)
+            approximation_params = chain((p for module in realnvps.values() for p in module.parameters()),
+                                         point_estimates.values())
 
             def sample_posterior(n_samples):
                 samples = {}
                 nlls = {}
-                for name, realnvp in realnvps.items():
-                    n_weights, nll = realnvp.sample(n_samples, t.prod(layer_sizes[name]), calculate_nll=True)
-                    n_weights = n_weights.reshape(n_samples, *layer_sizes[name])
-                    samples[name] = n_weights
-                    nlls[name] = nll
+                for name, p in model.named_parameters():
+                    if name in realnvps:
+                        n_weights, nll = realnvps[name].sample(n_samples, p.numel(), calculate_nll=True)
+                        n_weights = n_weights.reshape(n_samples, *p.size())
+                        samples[name] = n_weights
+                        nlls[name] = nll
+                    else:
+                        weights = point_estimates[name]
+                        samples[name] = weights.repeat(n_samples, *(1 for _ in range(weights.dim() - 1)))
                 return nlls, samples
 
         else:
@@ -371,7 +383,7 @@ def main():
             if log_mfvi is True and posterior == 'mfvi':
                 for name in scales.keys():
                     l = locs[name]
-                    s = scales[name]
+                    s = softplus(scales[name]) + 1e-8
                     r_s = s / l.abs()
                     _run.log_scalar(f"mfvi.{name}.miu.min", l.min(), current_step)
                     _run.log_scalar(f"mfvi.{name}.miu.max", l.max(), current_step)
