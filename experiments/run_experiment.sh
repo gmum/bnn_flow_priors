@@ -2,8 +2,8 @@
 #SBATCH --job-name=bnn_flow
 #SBATCH --qos=normal
 #SBATCH --gres=gpu:1
-#SBATCH --mem-per-gpu=40G
-#SBATCH --cpus-per-gpu=4
+#SBATCH --mem-per-gpu=10G
+#SBATCH --cpus-per-gpu=1
 
 # singularity path - update if needed
 source user.env

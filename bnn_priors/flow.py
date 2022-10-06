@@ -31,13 +31,13 @@ class RealNVP(nn.Module):
         return z, log_det_J
 
     def f_inv(self, z):
-        x = z
+        x = z.to(device('try_cuda'))
         log_det_J = x.new_zeros(x.shape[0])
         for i in reversed(range(self.num_flows)):
             x = x.flip(1)
             x, s, _ = self.coupling(x, i, forward=False)
             log_det_J = log_det_J + s.sum(dim=1)
-        return x, log_det_J
+        return x, log_det_J.to('cpu')
 
     def forward(self, x):
         z, log_det_J = self.f(x)
@@ -45,7 +45,6 @@ class RealNVP(nn.Module):
 
     def sample(self, batchSize, D, calculate_nll=False):
         z = self.prior.sample((batchSize,))
-        z = z.to(device("try_cuda"))
         x, log_det_J = self.f_inv(z)
         if calculate_nll:
             log_prob_z = self.prior.log_prob(z)
