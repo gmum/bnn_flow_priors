@@ -14,11 +14,14 @@ from sacred.utils import apply_backspaces_and_linefeeds
 from torch.distributions import Normal, MultivariateNormal
 from torch.nn import Sequential, Linear, LeakyReLU, Tanh
 from torch.nn.functional import softplus
+from torch.nn.utils import weight_norm
 
 from bnn_priors import exp_utils
 from bnn_priors.data import Synthetic
 from bnn_priors.exp_utils import evaluate_ood
 from bnn_priors.flow import RealNVP
+from bnn_priors.models import layers
+from bnn_priors.utils import get_module_by_name
 
 
 def main():
@@ -300,10 +303,33 @@ def main():
         elif posterior == 'realnvp':
             realnvps = {}
             point_estimates = {}
-            for n, p in model.named_parameters():
-                d = p.numel()
-                _log.info(f"Layer {n} weights size: {d}")
-                if d <= realnvp_max_input_size:
+            for module_name, module in model.named_modules():
+                children = len(list(module.children()))
+                _log.info(f'Module {module_name} type: {type(module)} children: {children}')
+                build_flow = False
+                if isinstance(module, layers.Conv2d):
+                    weight_norm(module.weight_prior, name='p')
+                    build_flow = True
+                elif isinstance(module, layers.Linear):
+                    weight_norm(module.weight_prior, name='p')
+                    build_flow = True
+                if build_flow:
+                    # add vs to point estimates
+                    v_full_name = f'{module_name}.weight_prior.p_v'
+                    v_params = get_module_by_name(model, v_full_name)
+                    point_estimates[v_full_name] = v_params.clone().detach().unsqueeze(0).requires_grad_(True)
+                    _log.info(f"Param {v_full_name} weights size: {v_params.numel()}")
+                    #
+                    bias_full_name = f'{module_name}.bias_prior.p'
+                    bias_params = get_module_by_name(model, bias_full_name)
+                    point_estimates[bias_full_name] = bias_params.clone().detach().unsqueeze(0).requires_grad_(True)
+                    _log.info(f"Param {bias_full_name} weights size: {bias_params.numel()}")
+                    # add gs to flow targets
+                    g_full_name = f'{module_name}.weight_prior.p_g'
+                    g_params = get_module_by_name(model, g_full_name)
+                    d = g_params.numel()
+                    _log.info(f"Param {g_full_name} weights size: {d}")
+                    # (instantiate a flow for gs)
                     flow_prior = MultivariateNormal(t.zeros(d), t.eye(d))
                     m = realnvp_m
                     net_s = lambda: Sequential(Linear(d // 2, m), LeakyReLU(),
@@ -312,9 +338,11 @@ def main():
                     net_t = lambda: Sequential(Linear(d // 2, m), LeakyReLU(),
                                                Linear(m, m), LeakyReLU(),
                                                Linear(m, d // 2))
-                    realnvps[n] = RealNVP(net_s, net_t, realnvp_num_layers, flow_prior)
-                    realnvps[n].to(device("try_cuda"))
-                else:
+                    realnvps[g_full_name] = RealNVP(net_s, net_t, realnvp_num_layers, flow_prior)
+                    realnvps[g_full_name].to(device("try_cuda"))
+            # all parameters unaccounted for
+            for n, p in model.named_parameters():
+                if n not in realnvps and n not in point_estimates:
                     point_estimates[n] = p.clone().detach().unsqueeze(0).requires_grad_(True)
             approximation_params = chain((p for module in realnvps.values() for p in module.parameters()),
                                          point_estimates.values())
