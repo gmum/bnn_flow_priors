@@ -302,6 +302,22 @@ def main():
                 return qs, samples
         elif posterior == 'realnvp':
             realnvps = {}
+
+            def build_flow_on(full_name, params):
+                d = params.numel()
+                _log.info(f"Param {full_name} weights size: {d}")
+                # (instantiate a flow for gs)
+                flow_prior = MultivariateNormal(t.zeros(d), t.eye(d))
+                m = realnvp_m
+                net_s = lambda: Sequential(Linear(d // 2, m), LeakyReLU(),
+                                           Linear(m, m), LeakyReLU(),
+                                           Linear(m, d // 2), Tanh())
+                net_t = lambda: Sequential(Linear(d // 2, m), LeakyReLU(),
+                                           Linear(m, m), LeakyReLU(),
+                                           Linear(m, d // 2))
+                realnvps[full_name] = RealNVP(net_s, net_t, realnvp_num_layers, flow_prior)
+                realnvps[full_name].to(device("try_cuda"))
+
             point_estimates = {}
             for module_name, module in model.named_modules():
                 children = len(list(module.children()))
@@ -320,26 +336,18 @@ def main():
                     point_estimates[v_full_name] = v_params.clone().detach().unsqueeze(0).requires_grad_(True)
                     _log.info(f"Param {v_full_name} weights size: {v_params.numel()}")
                     #
-                    bias_full_name = f'{module_name}.bias_prior.p'
-                    bias_params = get_module_by_name(model, bias_full_name)
-                    point_estimates[bias_full_name] = bias_params.clone().detach().unsqueeze(0).requires_grad_(True)
-                    _log.info(f"Param {bias_full_name} weights size: {bias_params.numel()}")
+                    bias_module_name = f'{module_name}.bias_prior'
+                    if get_module_by_name(model, bias_module_name) is not None:
+                        bias_full_name = f'{module_name}.bias_prior.p'
+                        bias_params = get_module_by_name(model, bias_full_name)
+                        build_flow_on(bias_full_name, bias_params)
+                    # point_estimates[bias_full_name] = bias_params.clone().detach().unsqueeze(0).requires_grad_(True)
+                    # _log.info(f"Param {bias_full_name} weights size: {bias_params.numel()}")
                     # add gs to flow targets
                     g_full_name = f'{module_name}.weight_prior.p_g'
                     g_params = get_module_by_name(model, g_full_name)
-                    d = g_params.numel()
-                    _log.info(f"Param {g_full_name} weights size: {d}")
-                    # (instantiate a flow for gs)
-                    flow_prior = MultivariateNormal(t.zeros(d), t.eye(d))
-                    m = realnvp_m
-                    net_s = lambda: Sequential(Linear(d // 2, m), LeakyReLU(),
-                                               Linear(m, m), LeakyReLU(),
-                                               Linear(m, d // 2), Tanh())
-                    net_t = lambda: Sequential(Linear(d // 2, m), LeakyReLU(),
-                                               Linear(m, m), LeakyReLU(),
-                                               Linear(m, d // 2))
-                    realnvps[g_full_name] = RealNVP(net_s, net_t, realnvp_num_layers, flow_prior)
-                    realnvps[g_full_name].to(device("try_cuda"))
+                    build_flow_on(g_full_name, g_params)
+
             # all parameters unaccounted for
             for n, p in model.named_parameters():
                 if n not in realnvps and n not in point_estimates:

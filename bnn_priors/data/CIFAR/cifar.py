@@ -72,7 +72,7 @@ class CIFAR10_C(CIFAR10):
     The corrupted data has to be downloaded from
     https://zenodo.org/record/2535967
     """
-    def __init__(self, corruption, dtype='float32', device="cpu", download=False):
+    def __init__(self, corruption, dtype='float32', device="cpu", download=True):
         super().__init__(dtype, device)
         _ROOT = os.path.abspath(os.path.dirname(__file__))
         dataset_dir_normal = f'{_ROOT}/cifar10/'
@@ -132,7 +132,7 @@ class SVHN(CIFAR10):
                             data_test.labels, permutation=(0,1,2,3))
 
 class CIFAR10Augmented:
-    def __init__(self, dtype='float32', device="cpu", download=False):
+    def __init__(self, dtype='float32', device="cpu", download=True):
         dataset_dir = f'{os.environ["CIFAR10_PATH"]}'
         dtype = getattr(t, dtype)
         self.dtype = dtype
@@ -170,7 +170,7 @@ class CIFAR10Augmented:
 
 
 class CIFAR10Small(CIFAR10Augmented):
-    def __init__(self, dtype='float32', device="cpu", download=False, subset_size=5000):
+    def __init__(self, dtype='float32', device="cpu", download=True, subset_size=5000):
         super().__init__(dtype=dtype, device=device, download=download)
         # Dataset in order is not exactly balanced, but close enough.
         # for subset_size=5000 we have, {6: 519, 9: 498, 4: 519, 1: 460, 2: 519, 7: 486, 8: 520, 3: 486, 5: 488, 0: 505}
