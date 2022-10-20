@@ -83,7 +83,7 @@ def main():
         # location parameter for the weight prior
         weight_loc = 0.0
         # scale parameter for the weight prior
-        weight_scale = 2.0 ** 0.5
+        weight_scale = 2.0**0.5
         # location parameter for the bias prior
         bias_loc = 0.0
         # scale parameter for the bias prior
@@ -171,36 +171,36 @@ def main():
 
     @ex.main
     def main(
-            model,
-            width,
-            depth,
-            weight_prior,
-            weight_loc,
-            weight_scale,
-            bias_prior,
-            bias_loc,
-            bias_scale,
-            batchnorm,
-            weight_prior_params,
-            bias_prior_params,
-            load_samples,
-            init_method,
-            batch_size,
-            lr,
-            epochs,
-            schedule,
-            learn_distributions,
-            n_samples,
-            n_samples_training,
-            ood_data,
-            metrics_skip,
-            posterior,
-            log_mfvi,
-            realnvp_m,
-            realnvp_num_layers,
-            realnvp_max_input_size,
-            _run,
-            _log,
+        model,
+        width,
+        depth,
+        weight_prior,
+        weight_loc,
+        weight_scale,
+        bias_prior,
+        bias_loc,
+        bias_scale,
+        batchnorm,
+        weight_prior_params,
+        bias_prior_params,
+        load_samples,
+        init_method,
+        batch_size,
+        lr,
+        epochs,
+        schedule,
+        learn_distributions,
+        n_samples,
+        n_samples_training,
+        ood_data,
+        metrics_skip,
+        posterior,
+        log_mfvi,
+        realnvp_m,
+        realnvp_num_layers,
+        realnvp_max_input_size,
+        _run,
+        _log,
     ):
         _log.info(f"Starting {neptune_run_id}")
 
@@ -274,7 +274,7 @@ def main():
         #     def model_saver_fn():
         #         yield None
 
-        if posterior == 'mfvi':
+        if posterior == "mfvi":
             # MFVI approx posterior:
             # locs   = {n: t.randn((p.shape), requires_grad=True, device=device(0)) for n, p in model.named_parameters() }
             locs = {
@@ -282,7 +282,8 @@ def main():
                 for n, p in model.named_parameters()
             }
             scales = {
-                n: t.randn_like(p).requires_grad_(True) for n, p in model.named_parameters()
+                n: t.randn_like(p).requires_grad_(True)
+                for n, p in model.named_parameters()
             }
             approximation_params = chain(locs.values(), scales.values())
 
@@ -300,7 +301,8 @@ def main():
                 else:  # for reparametrized gradients:
                     samples = {n: q.rsample(t.Size([n_samples])) for n, q in qs.items()}
                 return qs, samples
-        elif posterior == 'realnvp':
+
+        elif posterior == "realnvp":
             realnvps = {}
 
             def build_flow_on(full_name, params):
@@ -309,64 +311,87 @@ def main():
                 # (instantiate a flow for gs)
                 flow_prior = MultivariateNormal(t.zeros(d), t.eye(d))
                 m = realnvp_m
-                net_s = lambda: Sequential(Linear(d // 2, m), LeakyReLU(),
-                                           Linear(m, m), LeakyReLU(),
-                                           Linear(m, d // 2), Tanh())
-                net_t = lambda: Sequential(Linear(d // 2, m), LeakyReLU(),
-                                           Linear(m, m), LeakyReLU(),
-                                           Linear(m, d // 2))
-                realnvps[full_name] = RealNVP(net_s, net_t, realnvp_num_layers, flow_prior)
+                net_s = lambda: Sequential(
+                    Linear(d // 2, m),
+                    LeakyReLU(),
+                    Linear(m, m),
+                    LeakyReLU(),
+                    Linear(m, d // 2),
+                    Tanh(),
+                )
+                net_t = lambda: Sequential(
+                    Linear(d // 2, m),
+                    LeakyReLU(),
+                    Linear(m, m),
+                    LeakyReLU(),
+                    Linear(m, d // 2),
+                )
+                realnvps[full_name] = RealNVP(
+                    net_s, net_t, realnvp_num_layers, flow_prior
+                )
                 realnvps[full_name].to(device("try_cuda"))
 
             point_estimates = {}
             for module_name, module in model.named_modules():
                 children = len(list(module.children()))
-                _log.info(f'Module {module_name} type: {type(module)} children: {children}')
+                _log.info(
+                    f"Module {module_name} type: {type(module)} children: {children}"
+                )
                 build_flow = False
                 if isinstance(module, layers.Conv2d):
-                    weight_norm(module.weight_prior, name='p')
+                    weight_norm(module.weight_prior, name="p")
                     build_flow = True
                 elif isinstance(module, layers.Linear):
-                    weight_norm(module.weight_prior, name='p')
+                    weight_norm(module.weight_prior, name="p")
                     build_flow = True
                 if build_flow:
                     # add vs to point estimates
-                    v_full_name = f'{module_name}.weight_prior.p_v'
+                    v_full_name = f"{module_name}.weight_prior.p_v"
                     v_params = get_module_by_name(model, v_full_name)
-                    point_estimates[v_full_name] = v_params.clone().detach().unsqueeze(0).requires_grad_(True)
+                    point_estimates[v_full_name] = (
+                        v_params.clone().detach().unsqueeze(0).requires_grad_(True)
+                    )
                     _log.info(f"Param {v_full_name} weights size: {v_params.numel()}")
                     #
-                    bias_module_name = f'{module_name}.bias_prior'
+                    bias_module_name = f"{module_name}.bias_prior"
                     if get_module_by_name(model, bias_module_name) is not None:
-                        bias_full_name = f'{module_name}.bias_prior.p'
+                        bias_full_name = f"{module_name}.bias_prior.p"
                         bias_params = get_module_by_name(model, bias_full_name)
                         build_flow_on(bias_full_name, bias_params)
                     # point_estimates[bias_full_name] = bias_params.clone().detach().unsqueeze(0).requires_grad_(True)
                     # _log.info(f"Param {bias_full_name} weights size: {bias_params.numel()}")
                     # add gs to flow targets
-                    g_full_name = f'{module_name}.weight_prior.p_g'
+                    g_full_name = f"{module_name}.weight_prior.p_g"
                     g_params = get_module_by_name(model, g_full_name)
                     build_flow_on(g_full_name, g_params)
 
             # all parameters unaccounted for
             for n, p in model.named_parameters():
                 if n not in realnvps and n not in point_estimates:
-                    point_estimates[n] = p.clone().detach().unsqueeze(0).requires_grad_(True)
-            approximation_params = chain((p for module in realnvps.values() for p in module.parameters()),
-                                         point_estimates.values())
+                    point_estimates[n] = (
+                        p.clone().detach().unsqueeze(0).requires_grad_(True)
+                    )
+            approximation_params = chain(
+                (p for module in realnvps.values() for p in module.parameters()),
+                point_estimates.values(),
+            )
 
             def sample_posterior(n_samples):
                 samples = {}
                 nlls = {}
                 for name, p in model.named_parameters():
                     if name in realnvps:
-                        n_weights, nll = realnvps[name].sample(n_samples, p.numel(), calculate_nll=True)
+                        n_weights, nll = realnvps[name].sample(
+                            n_samples, p.numel(), calculate_nll=True
+                        )
                         n_weights = n_weights.reshape(n_samples, *p.size())
                         samples[name] = n_weights
                         nlls[name] = nll
                     else:
                         weights = point_estimates[name]
-                        samples[name] = weights.repeat(n_samples, *(1 for _ in range(weights.dim() - 1)))
+                        samples[name] = weights.repeat(
+                            n_samples, *(1 for _ in range(weights.dim() - 1))
+                        )
                 return nlls, samples
 
         else:
@@ -416,7 +441,7 @@ def main():
                 _log.info(
                     f"[evaluate_and_store_metrics][step={current_step}] eval.{k}={v}"
                 )
-            if log_mfvi is True and posterior == 'mfvi':
+            if log_mfvi is True and posterior == "mfvi":
                 for name in scales.keys():
                     l = locs[name]
                     s = softplus(scales[name]) + 1e-8
@@ -429,13 +454,25 @@ def main():
                     _run.log_scalar(f"mfvi.{name}.sigma.min", s.min(), current_step)
                     _run.log_scalar(f"mfvi.{name}.sigma.max", s.max(), current_step)
                     _run.log_scalar(f"mfvi.{name}.sigma.mean", s.mean(), current_step)
-                    _run.log_scalar(f"mfvi.{name}.sigma.median", s.median(), current_step)
+                    _run.log_scalar(
+                        f"mfvi.{name}.sigma.median", s.median(), current_step
+                    )
                     _run.log_scalar(f"mfvi.{name}.sigma.std", s.std(), current_step)
-                    _run.log_scalar(f"mfvi.{name}.rel_sigma.min", r_s.min(), current_step)
-                    _run.log_scalar(f"mfvi.{name}.rel_sigma.max", r_s.max(), current_step)
-                    _run.log_scalar(f"mfvi.{name}.rel_sigma.mean", r_s.mean(), current_step)
-                    _run.log_scalar(f"mfvi.{name}.rel_sigma.median", r_s.median(), current_step)
-                    _run.log_scalar(f"mfvi.{name}.rel_sigma.std", r_s.std(), current_step)
+                    _run.log_scalar(
+                        f"mfvi.{name}.rel_sigma.min", r_s.min(), current_step
+                    )
+                    _run.log_scalar(
+                        f"mfvi.{name}.rel_sigma.max", r_s.max(), current_step
+                    )
+                    _run.log_scalar(
+                        f"mfvi.{name}.rel_sigma.mean", r_s.mean(), current_step
+                    )
+                    _run.log_scalar(
+                        f"mfvi.{name}.rel_sigma.median", r_s.median(), current_step
+                    )
+                    _run.log_scalar(
+                        f"mfvi.{name}.rel_sigma.std", r_s.std(), current_step
+                    )
             model.train(training)
 
         # iterate over samples (taken from the original code):
@@ -497,11 +534,11 @@ def main():
                 x, y = x.to(device("try_cuda")), y.to(device("try_cuda"))
 
                 # sampling from approximate posterior
-                if posterior == 'mfvi':
+                if posterior == "mfvi":
                     qs, posterior_samples = sample_posterior(
                         n_samples_training, only_pointwise_locs=not learn_distributions
                     )
-                elif posterior == 'realnvp':
+                elif posterior == "realnvp":
                     nlls, posterior_samples = sample_posterior(n_samples_training)
                 else:
                     raise ValueError("Illegal 'posterior' value.")
@@ -514,7 +551,7 @@ def main():
                     t.tensor(0.0, device=device("try_cuda")),
                 )
                 for sample_i, sample in enumerate(
-                        sample_iter({**posterior_samples, **prior_samples})
+                    sample_iter({**posterior_samples, **prior_samples})
                 ):
                     overwrite_params(
                         model, sample
@@ -528,7 +565,7 @@ def main():
                     if learn_distributions:
                         # priors:
                         log_prior += model.log_prior()
-                        if posterior == 'mfvi':
+                        if posterior == "mfvi":
                             prior_samples = sample_priors(n_samples_training)
                             # entropy:
                             # entropy += sum( q.entropy().sum() for q in qs.values() ) # closed-form for Gaussian
@@ -536,9 +573,12 @@ def main():
                                 -q.log_prob(s).sum()
                                 for q, s in zip(qs.values(), posterior_samples.values())
                             )  # via samples
-                        elif posterior == 'realnvp':
+                        elif posterior == "realnvp":
                             entropy += sum(
-                                nll.sum() for nll, s in zip(nlls.values(), posterior_samples.values())
+                                nll.sum()
+                                for nll, s in zip(
+                                    nlls.values(), posterior_samples.values()
+                                )
                             )
                         else:
                             raise ValueError("Illegal 'posterior' value.")
