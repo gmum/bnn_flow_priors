@@ -96,7 +96,7 @@ def main():
             weight_prior_params = json.loads(weight_prior_params)
         if not isinstance(bias_prior_params, dict):
             bias_prior_params = json.loads(bias_prior_params)
-        # total number of samples to be drawn from the posterior
+        # total number of samples to be drawn from the posterior for evaluation
         n_samples = 100
         # total number of samples for training
         n_samples_training = 1
@@ -202,7 +202,15 @@ def main():
         _run,
         _log,
     ):
-        _log.info(f"Starting {neptune_run_id}")
+        def _log_warning(msg):
+            print(f"[WARNING] {msg}")
+            _log._log_warning(msg)
+
+        def _log_info(msg):
+            print(f"[INFO] {msg}")
+            _log.info(msg)
+
+        _log_info(f"Starting {neptune_run_id}")
 
         # loading data
         data = get_data()
@@ -246,15 +254,15 @@ def main():
             model_sd = model.state_dict()
             for k in state_dict.keys():
                 if k not in model_sd:
-                    _log.warning(f"key {k} not in model, ignoring")
+                    _log_warning(f"key {k} not in model, ignoring")
                     del state_dict[k]
                 elif model_sd[k].size() != state_dict[k].size():
-                    _log.warning(
+                    _log_warning(
                         f"key {k} size mismatch, model={model_sd[k].size()}, loaded={state_dict[k].size()}"
                     )
                     state_dict[k] = model_sd[k]
             missing_keys = set(model_sd.keys()) - set(state_dict.keys())
-            _log.warning(
+            _log_warning(
                 f"The following keys were not found in loaded state dict: {missing_keys}"
             )
             model_sd.update(state_dict)
@@ -263,8 +271,8 @@ def main():
             del model_sd
         model.to(device("try_cuda"))
 
-        _log.info(f"load_samples={load_samples}")
-        _log.info(f"init_method={init_method}")
+        _log_info(f"load_samples={load_samples}")
+        _log_info(f"init_method={init_method}")
 
         # if save_samples:
         #     model_saver_fn = (lambda: exp_utils.HDF5ModelSaver(
@@ -274,128 +282,162 @@ def main():
         #     def model_saver_fn():
         #         yield None
 
-        if posterior == "mfvi":
-            # MFVI approx posterior:
-            # locs   = {n: t.randn((p.shape), requires_grad=True, device=device(0)) for n, p in model.named_parameters() }
-            locs = {
-                n: p.clone().detach().requires_grad_(True)
-                for n, p in model.named_parameters()
-            }
-            scales = {
-                n: t.randn_like(p).requires_grad_(True)
-                for n, p in model.named_parameters()
-            }
-            approximation_params = chain(locs.values(), scales.values())
+        #######################################################################
 
-            def sample_posterior(n_samples, only_pointwise_locs=False):
-                qs = {
-                    n: Normal(l, softplus(s) + 1e-8)
-                    for (n, l), s in zip(locs.items(), scales.values())
-                }
-                if only_pointwise_locs:
-                    # for point-wise training simply return repeated locs as samples:
-                    samples = {
-                        n: l.expand(t.Size([n_samples] + [-1 for _ in l.shape]))
-                        for n, l in locs.items()
-                    }
-                else:  # for reparametrized gradients:
-                    samples = {n: q.rsample(t.Size([n_samples])) for n, q in qs.items()}
-                return qs, samples
+        def build_realnvp(output_dim):
+            d = output_dim
+            flow_prior = MultivariateNormal(t.zeros(d), t.eye(d))
+            m = realnvp_m
+            net_s = lambda: Sequential(
+                Linear(d // 2, m),
+                LeakyReLU(),
+                Linear(m, m),
+                LeakyReLU(),
+                Linear(m, d // 2),
+                Tanh(),
+            )
+            net_t = lambda: Sequential(
+                Linear(d // 2, m),
+                LeakyReLU(),
+                Linear(m, m),
+                LeakyReLU(),
+                Linear(m, d // 2),
+            )
+            realnvp = RealNVP(net_s, net_t, realnvp_num_layers, flow_prior)
+            realnvp.to(device("try_cuda"))
+            return realnvp
 
-        elif posterior == "realnvp":
-            realnvps = {}
+        #######################################################################
 
-            def build_flow_on(full_name, params):
-                d = params.numel()
-                _log.info(f"Param {full_name} weights size: {d}")
-                # (instantiate a flow for gs)
-                flow_prior = MultivariateNormal(t.zeros(d), t.eye(d))
-                m = realnvp_m
-                net_s = lambda: Sequential(
-                    Linear(d // 2, m),
-                    LeakyReLU(),
-                    Linear(m, m),
-                    LeakyReLU(),
-                    Linear(m, d // 2),
-                    Tanh(),
-                )
-                net_t = lambda: Sequential(
-                    Linear(d // 2, m),
-                    LeakyReLU(),
-                    Linear(m, m),
-                    LeakyReLU(),
-                    Linear(m, d // 2),
-                )
-                realnvps[full_name] = RealNVP(
-                    net_s, net_t, realnvp_num_layers, flow_prior
-                )
-                realnvps[full_name].to(device("try_cuda"))
+        # Currently supported posterior approximations:
+        point_estimates = {}
+        realnvps = {}
+        gaussians = {}
+        is_parameter_already_handled = (
+            lambda name: name in realnvps
+            or name in point_estimates
+            or name in gaussians
+        )
 
-            point_estimates = {}
-            for module_name, module in model.named_modules():
-                children = len(list(module.children()))
-                _log.info(
-                    f"Module {module_name} type: {type(module)} children: {children}"
+        # Building RealNVP for selected layers
+        bias_flows = False  # build flows for biases or not
+        for module_name, module in model.named_modules():
+            children = len(list(module.children()))
+
+            if learn_distributions and (
+                isinstance(module, layers.Conv2d) or isinstance(module, layers.Linear)
+            ):  # criteria for modeling with flows
+                _log_info(
+                    f"Building flow for {module_name} type: {type(module)} children: {children}"
                 )
-                build_flow = False
-                if isinstance(module, layers.Conv2d):
-                    weight_norm(module.weight_prior, name="p")
-                    build_flow = True
-                elif isinstance(module, layers.Linear):
-                    weight_norm(module.weight_prior, name="p")
-                    build_flow = True
-                if build_flow:
-                    # add vs to point estimates
-                    v_full_name = f"{module_name}.weight_prior.p_v"
-                    v_params = get_module_by_name(model, v_full_name)
-                    point_estimates[v_full_name] = (
-                        v_params.clone().detach().unsqueeze(0).requires_grad_(True)
-                    )
-                    _log.info(f"Param {v_full_name} weights size: {v_params.numel()}")
-                    #
+
+                weight_norm(module.weight_prior, name="p")
+
+                # add vs to point estimates
+                v_full_name = f"{module_name}.weight_prior.p_v"
+                v_params = get_module_by_name(model, v_full_name)
+                point_estimates[v_full_name] = (
+                    v_params.clone().detach().requires_grad_(True)
+                )
+                _log_info(f"Param {v_full_name} weights size: {v_params.numel()}")
+
+                # add gs to flow targets
+                g_full_name = f"{module_name}.weight_prior.p_g"
+                g_params = get_module_by_name(model, g_full_name)
+                realnvps[g_full_name] = build_realnvp(g_params.numel())
+
+                if bias_flows:
                     bias_module_name = f"{module_name}.bias_prior"
                     if get_module_by_name(model, bias_module_name) is not None:
                         bias_full_name = f"{module_name}.bias_prior.p"
                         bias_params = get_module_by_name(model, bias_full_name)
-                        build_flow_on(bias_full_name, bias_params)
-                    # point_estimates[bias_full_name] = bias_params.clone().detach().unsqueeze(0).requires_grad_(True)
-                    # _log.info(f"Param {bias_full_name} weights size: {bias_params.numel()}")
-                    # add gs to flow targets
-                    g_full_name = f"{module_name}.weight_prior.p_g"
-                    g_params = get_module_by_name(model, g_full_name)
-                    build_flow_on(g_full_name, g_params)
+                        realnvps[bias_full_name] = build_realnvp(bias_params.numel())
 
-            # all parameters unaccounted for
-            for n, p in model.named_parameters():
-                if n not in realnvps and n not in point_estimates:
-                    point_estimates[n] = (
-                        p.clone().detach().unsqueeze(0).requires_grad_(True)
+        # add point estimates for selected parameters:
+        def train_pointwise_selector(parameter_name: str) -> bool:
+            """If you want to force some pointwise parameter, return True for it."""
+            return not learn_distributions
+
+        for n, p in model.named_parameters():
+            if is_parameter_already_handled(n):
+                continue
+            if train_pointwise_selector(n):
+                _log_info(f"Parameter {n} will be trained pointwise")
+                # create a variable of the same shape:
+                weights = p.clone().detach().requires_grad_(True)
+                point_estimates[n] = weights
+
+        # all parameters unaccounted for will be modeled as factorized Gaussians
+        for n, p in model.named_parameters():
+            if is_parameter_already_handled(n):
+                continue
+
+            _log_info(f"Parameter {n} will be modeled with a factorized Gaussian")
+            # create variables of the same shape:
+            loc = p.clone().detach().requires_grad_(True)
+            unnormalized_scale = t.randn_like(p).requires_grad_(True)
+
+            gaussians[n] = [loc, unnormalized_scale]
+
+        # gather parameters to be trained for all approximation types
+        approximation_params = chain(
+            (p for module in realnvps.values() for p in module.parameters()),
+            point_estimates.values(),
+            (loc for loc, _ in gaussians.values()),
+            (uscale for _, uscale in gaussians.values()),
+        )
+
+        #######################################################################
+
+        def sample_posterior(n_samples):
+            samples = {}
+            nlls = {}
+            for name, p in model.named_parameters():
+
+                if name in realnvps:
+                    sample, nll = realnvps[name].sample(
+                        n_samples, p.numel(), calculate_nll=True
                     )
-            approximation_params = chain(
-                (p for module in realnvps.values() for p in module.parameters()),
-                point_estimates.values(),
-            )
+                    sample = sample.reshape(n_samples, *p.size())
 
-            def sample_posterior(n_samples):
-                samples = {}
-                nlls = {}
-                for name, p in model.named_parameters():
-                    if name in realnvps:
-                        n_weights, nll = realnvps[name].sample(
-                            n_samples, p.numel(), calculate_nll=True
-                        )
-                        n_weights = n_weights.reshape(n_samples, *p.size())
-                        samples[name] = n_weights
-                        nlls[name] = nll
-                    else:
-                        weights = point_estimates[name]
-                        samples[name] = weights.repeat(
-                            n_samples, *(1 for _ in range(weights.dim() - 1))
-                        )
-                return nlls, samples
+                    samples[name] = sample
+                    nlls[name] = nll
 
-        else:
-            raise ValueError("Illegal 'posterior' value.")
+                elif name in point_estimates:
+                    sample = point_estimates[name]
+                    sample = sample.expand(
+                        t.Size([n_samples] + [-1 for _ in sample.shape])
+                    )
+
+                    samples[name] = sample
+                    nll = t.zeros(
+                        n_samples, dtype=sample.dtype
+                    )  # not used besides the below assert
+
+                elif name in gaussians:
+                    loc, unnormalized_scale = gaussians[name]
+                    q = Normal(loc, softplus(unnormalized_scale) + 1e-8)
+                    sample = q.rsample(t.Size([n_samples]))
+                    data_dims = list(range(1, len(sample.shape)))
+
+                    # calc total NLL for all params (shape==n_samples)
+                    nll = -q.log_prob(sample).sum(dim=data_dims)
+
+                    samples[name] = sample
+                    nlls[name] = nll
+
+                else:
+                    raise Exception(f"I don't know how to sample posterior for {name}!")
+
+                assert (
+                    sample.shape[0] == n_samples
+                ), f"parameter={name}({p.shape}) sample.shape={sample.shape} n_samples={n_samples}"
+                assert (
+                    sample.shape[1:] == p.shape
+                ), f"parameter={name}({p.shape}) sample.shape=={sample.shape} p.shape={p.shape}"
+                assert len(nll) == n_samples
+
+            return nlls, samples
 
         def sample_priors(n_samples):
             prior_samples = {
@@ -414,16 +456,27 @@ def main():
                     continue
                 sample_path = f"{path}.{name}"[1:]  # skip the leading dot
                 new_value = samples[sample_path]
-                # assert new_value.shape == module._parameters[name].shape, f"sample_path={sample_path} shape={new_value.shape} current shape={module._parameters[name].shape}"
+                # assert (
+                #     new_value.shape == module._parameters[name].shape
+                # ), f"sample_path={sample_path} shape={new_value.shape} current shape={module._parameters[name].shape}"
                 module._parameters[name] = new_value
             return module
 
+        #######################################################################
+
         def evaluate_and_store_metrics(current_step, n_samples, calib=True, ood=False):
+            _log_info("evaluate_and_store_metrics")
             training = model.training
             model.eval()
+
             _, posterior_samples = sample_posterior(n_samples)
             prior_samples = sample_priors(n_samples)
             samples = {**posterior_samples, **prior_samples}
+            # _log_info(
+            #     "[evaluate_and_store_metrics] samples ({n_samples}):"
+            #     + ", ".join(f"{p}:{s.shape}" for p, s in samples.items())
+            # )
+
             results = exp_utils.evaluate_model(
                 model=model,
                 dataloader_test=dataloader_test,
@@ -438,7 +491,7 @@ def main():
                 )
             for k, v in results.items():
                 _run.log_scalar(f"eval.{k}", v, current_step)
-                _log.info(
+                _log_info(
                     f"[evaluate_and_store_metrics][step={current_step}] eval.{k}={v}"
                 )
             if log_mfvi is True and posterior == "mfvi":
@@ -524,24 +577,22 @@ def main():
         else:
             scheduler = None
 
-        # train
+        _log_info("Model parameters:")
+        for parameter_name, parameter in model.named_parameters():
+            _log_info(f" - {parameter_name}: {parameter.shape}")
+
+        _log_info("Start training")
         current_step = 0
         evaluate_and_store_metrics(current_step, n_samples)
         for epoch in range(epochs):
+            _log_info(f"Epoch {epoch}")
             for x, y in dataloader:
+
                 if current_step % 1000 == 0:
                     _run.log_scalar("progress", current_step / last_step, current_step)
                 x, y = x.to(device("try_cuda")), y.to(device("try_cuda"))
 
-                # sampling from approximate posterior
-                if posterior == "mfvi":
-                    qs, posterior_samples = sample_posterior(
-                        n_samples_training, only_pointwise_locs=not learn_distributions
-                    )
-                elif posterior == "realnvp":
-                    nlls, posterior_samples = sample_posterior(n_samples_training)
-                else:
-                    raise ValueError("Illegal 'posterior' value.")
+                nlls, posterior_samples = sample_posterior(n_samples_training)
                 prior_samples = sample_priors(n_samples_training)
 
                 # sum up estimates for ELBO parts
@@ -550,40 +601,22 @@ def main():
                     t.tensor(0.0, device=device("try_cuda")),
                     t.tensor(0.0, device=device("try_cuda")),
                 )
-                for sample_i, sample in enumerate(
-                    sample_iter({**posterior_samples, **prior_samples})
-                ):
-                    overwrite_params(
-                        model, sample
-                    )  # model.load_state_dict(sample, strict=True)
 
-                    # likelihood:
-                    log_likelihood += model.log_likelihood(
-                        x, y, x_train.shape[0]
-                    )  # preds = model(x); log_likelihood += preds.log_prob(y).sum() * x_train.shape[0]/x.shape[0]
+                entropy += sum(
+                    nll.sum() for nll in nlls.values()
+                )  # sum over samples and then over variables
+
+                # iterate and sum over samples:
+                for sample in sample_iter({**posterior_samples, **prior_samples}):
+                    overwrite_params(model, sample)
+
+                    # preds = model(x); log_likelihood += preds.log_prob(y).sum() * x_train.shape[0]/x.shape[0]
+                    log_likelihood += model.log_likelihood(x, y, x_train.shape[0])
 
                     if learn_distributions:
-                        # priors:
                         log_prior += model.log_prior()
-                        if posterior == "mfvi":
-                            prior_samples = sample_priors(n_samples_training)
-                            # entropy:
-                            # entropy += sum( q.entropy().sum() for q in qs.values() ) # closed-form for Gaussian
-                            entropy += sum(
-                                -q.log_prob(s).sum()
-                                for q, s in zip(qs.values(), posterior_samples.values())
-                            )  # via samples
-                        elif posterior == "realnvp":
-                            entropy += sum(
-                                nll.sum()
-                                for nll, s in zip(
-                                    nlls.values(), posterior_samples.values()
-                                )
-                            )
-                        else:
-                            raise ValueError("Illegal 'posterior' value.")
 
-                elbo = log_likelihood + log_prior + entropy
+                elbo = (log_likelihood + log_prior + entropy) / n_samples_training
                 loss_vi = -elbo
 
                 _run.log_scalar(
@@ -600,6 +633,7 @@ def main():
                 if scheduler is not None:
                     scheduler.step()
                 current_step += 1
+
             if epoch % metrics_skip == 0 and epoch > 0:
                 evaluate_and_store_metrics(current_step, n_samples)
 
@@ -607,7 +641,7 @@ def main():
         # save model
         state = model.state_dict()
         t.save(state, state_path)
-        _log.info(f"Saved state to local path {str(state_path)}")
+        _log_info(f"Saved state to local path {str(state_path)}")
         # TODO possibly save samples in h5 file as they do in eval_bnn.py
         # final evaluation
         evaluate_and_store_metrics(current_step, n_samples, ood=True)
