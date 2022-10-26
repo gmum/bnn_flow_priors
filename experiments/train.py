@@ -321,6 +321,7 @@ def main():
 
         # Building RealNVP for selected layers
         bias_flows = False  # build flows for biases or not
+        v2g, g2v_dim = {}, {}  # matching flow variables and pointwise variables
         for module_name, module in model.named_modules():
             children = len(list(module.children()))
 
@@ -330,21 +331,32 @@ def main():
                 _log_info(
                     f"Building flow for {module_name} type: {type(module)} children: {children}"
                 )
+                weight_shape = module.weight_prior.p.shape
 
                 weight_norm(module.weight_prior, name="p")
 
                 # add vs to point estimates
                 v_full_name = f"{module_name}.weight_prior.p_v"
                 v_params = get_module_by_name(model, v_full_name)
-                point_estimates[v_full_name] = (
-                    v_params.clone().detach().requires_grad_(True)
+                v_params = (
+                    v_params.clone()
+                    .detach()
+                    .requires_grad_(True)
+                    .to(device("try_cuda"))
                 )
+                point_estimates[v_full_name] = v_params
                 _log_info(f"Param {v_full_name} weights size: {v_params.numel()}")
 
                 # add gs to flow targets
                 g_full_name = f"{module_name}.weight_prior.p_g"
                 g_params = get_module_by_name(model, g_full_name)
                 realnvps[g_full_name] = build_realnvp(g_params.numel())
+
+                _log_info(
+                    f" => {module_name} of shape {weight_shape}: v={v_params.numel()}, g={g_params.numel()}"
+                )
+                g2v_dim[g_full_name] = v_params.shape.numel()
+                v2g[v_full_name] = g_full_name
 
                 if bias_flows:
                     bias_module_name = f"{module_name}.bias_prior"
@@ -374,17 +386,21 @@ def main():
 
             _log_info(f"Parameter {n} will be modeled with a factorized Gaussian")
             # create variables of the same shape:
-            loc = p.clone().detach().requires_grad_(True)
-            unnormalized_scale = t.randn_like(p).requires_grad_(True)
+            loc = p.clone().detach().requires_grad_(True).to(device("try_cuda"))
+            unnormalized_scale = (
+                t.randn_like(p).requires_grad_(True).to(device("try_cuda"))
+            )
 
             gaussians[n] = [loc, unnormalized_scale]
 
         # gather parameters to be trained for all approximation types
-        approximation_params = chain(
-            (p for module in realnvps.values() for p in module.parameters()),
-            point_estimates.values(),
-            (loc for loc, _ in gaussians.values()),
-            (uscale for _, uscale in gaussians.values()),
+        approximation_params = list(
+            chain(
+                (p for module in realnvps.values() for p in module.parameters()),
+                point_estimates.values(),
+                (loc for loc, _ in gaussians.values()),
+                (uscale for _, uscale in gaussians.values()),
+            )
         )
 
         #######################################################################
@@ -399,9 +415,13 @@ def main():
                         n_samples, p.numel(), calculate_nll=True
                     )
                     sample = sample.reshape(n_samples, *p.size())
+                    nll = nll.to(sample.device)
 
                     samples[name] = sample
-                    nlls[name] = nll
+                    theta_dim_per_g = (
+                        g2v_dim.get(name, 1) / p.shape.numel()
+                    )  # how many thetas are created from each g
+                    nlls[name] = nll * theta_dim_per_g
 
                 elif name in point_estimates:
                     sample = point_estimates[name]
@@ -413,6 +433,7 @@ def main():
                     nll = t.zeros(
                         n_samples, dtype=sample.dtype
                     )  # not used besides the below assert
+                    nll = nll.to(sample.device)
 
                 elif name in gaussians:
                     loc, unnormalized_scale = gaussians[name]
@@ -422,6 +443,7 @@ def main():
 
                     # calc total NLL for all params (shape==n_samples)
                     nll = -q.log_prob(sample).sum(dim=data_dims)
+                    nll = nll.to(sample.device)
 
                     samples[name] = sample
                     nlls[name] = nll
@@ -436,6 +458,15 @@ def main():
                     sample.shape[1:] == p.shape
                 ), f"parameter={name}({p.shape}) sample.shape=={sample.shape} p.shape={p.shape}"
                 assert len(nll) == n_samples
+
+            # add log determinants for changing variables g to theta
+            for v_name, g_name in v2g.items():
+                v = samples[v_name]
+                data_dims = list(range(1, len(v.shape)))
+                # log det J = \sum_i log 1/u_i = -\sum_i log u_i
+                u = v  # TODO NORMALIZATION!
+                log_det_J = -u.log().sum(data_dims)
+                nlls[g_name] += -log_det_J
 
             return nlls, samples
 
