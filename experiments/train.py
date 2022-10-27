@@ -13,7 +13,7 @@ from sacred import Experiment
 from sacred.utils import apply_backspaces_and_linefeeds
 from torch.distributions import Normal, MultivariateNormal
 from torch.nn import Sequential, Linear, LeakyReLU, Tanh
-from torch.nn.functional import softplus
+from torch.nn.functional import softplus, normalize
 from torch.nn.utils import weight_norm
 
 from bnn_priors import exp_utils
@@ -463,8 +463,9 @@ def main():
             for v_name, g_name in v2g.items():
                 v = samples[v_name]
                 data_dims = list(range(1, len(v.shape)))
-                # log det J = \sum_i log 1/u_i = -\sum_i log u_i
-                u = v  # TODO NORMALIZATION!
+                v_norm = normalize(v, p=2.0, dim=1)
+                # log det J = \sum_i log 1/u_i = -\sum_i log u_
+                u = v/v_norm  # TODO NORMALIZATION!
                 log_det_J = -u.log().sum(data_dims)
                 nlls[g_name] += -log_det_J
 
