@@ -81,7 +81,7 @@ def main():
         # location parameter for the weight prior
         weight_loc = 0.0
         # scale parameter for the weight prior
-        weight_scale = 2.0**0.5
+        weight_scale = 2.0 ** 0.5
         # location parameter for the bias prior
         bias_loc = 0.0
         # scale parameter for the bias prior
@@ -121,16 +121,18 @@ def main():
         save_samples = True
         # OOD dataset
         ood_data = None
-        # whether to learn distributions (leaves only log likelihood loss)
-        learn_distributions = True
-        # whether to learn distributions also on biases
-        learn_distributions_biases = True
-        # whether to log sigma statistics
-        log_mfvi = False
+        # whether to apply weight normalization on the weights
+        weight_normalization = False
+        # whether to learn distributions (None leaves only log likelihood loss)
+        # choices: None, 'realnvp', 'mfvi'
+        weights_posterior = None
+        # whether to learn distributions on biases (None leaves only log likelihood loss)
+        bias_posterior = None
+        # whether to log statistics for mfvi
+        log_mfvi = True
         # realnvp posterior settings
         realnvp_m = 256
         realnvp_num_layers = 8
-        realnvp_max_input_size = 1024
 
     # decorators
     device = ex.capture(exp_utils.device)
@@ -171,36 +173,36 @@ def main():
 
     @ex.main
     def main(
-        model,
-        width,
-        depth,
-        weight_prior,
-        weight_loc,
-        weight_scale,
-        bias_prior,
-        bias_loc,
-        bias_scale,
-        batchnorm,
-        weight_prior_params,
-        bias_prior_params,
-        load_samples,
-        init_method,
-        batch_size,
-        lr,
-        epochs,
-        schedule,
-        learn_distributions,
-        learn_distributions_biases,
-        n_samples,
-        n_samples_training,
-        ood_data,
-        metrics_skip,
-        log_mfvi,
-        realnvp_m,
-        realnvp_num_layers,
-        realnvp_max_input_size,
-        _run,
-        _log,
+            model,
+            width,
+            depth,
+            weight_prior,
+            weight_loc,
+            weight_scale,
+            bias_prior,
+            bias_loc,
+            bias_scale,
+            batchnorm,
+            weight_prior_params,
+            bias_prior_params,
+            load_samples,
+            init_method,
+            batch_size,
+            lr,
+            epochs,
+            schedule,
+            weight_normalization,
+            weights_posterior,
+            bias_posterior,
+            n_samples,
+            n_samples_training,
+            ood_data,
+            metrics_skip,
+            log_mfvi,
+            realnvp_m,
+            realnvp_num_layers,
+            _run,
+            _log,
     ):
         def _log_warning(msg):
             print(f"[WARNING] {msg}")
@@ -315,89 +317,122 @@ def main():
         gaussians = {}
         is_parameter_already_handled = (
             lambda name: name in realnvps
-            or name in point_estimates
-            or name in gaussians
+                         or name in point_estimates
+                         or name in gaussians
         )
-
+        if weight_normalization:
+            for module_name, module in model.named_modules():
+                if isinstance(module, (layers.Conv2d, layers.Linear)):
+                    weight_norm(module.weight_prior, name="p")
         # Building RealNVP for selected layers
-        bias_flows = False  # build flows for biases or not
         v2g, g2v_dim = {}, {}  # matching flow variables and pointwise variables
         for module_name, module in model.named_modules():
-            children = len(list(module.children()))
-
-            if learn_distributions and (
-                isinstance(module, layers.Conv2d) or isinstance(module, layers.Linear)
-            ):  # criteria for modeling with flows
-                _log_info(
-                    f"Building flow for {module_name} type: {type(module)} children: {children}"
-                )
-                weight_shape = module.weight_prior.p.shape
-
-                weight_norm(module.weight_prior, name="p")
-
-                # add vs to point estimates
-                v_full_name = f"{module_name}.weight_prior.p_v"
-                v_params = get_module_by_name(model, v_full_name)
-                v_params = (
-                    v_params.clone()
-                    .detach()
-                    .requires_grad_(True)
-                    .to(device("try_cuda"))
-                )
-                point_estimates[v_full_name] = v_params
-                _log_info(f"Param {v_full_name} weights size: {v_params.numel()}")
-
-                # add gs to flow targets
-                g_full_name = f"{module_name}.weight_prior.p_g"
-                g_params = get_module_by_name(model, g_full_name)
-                realnvps[g_full_name] = build_realnvp(g_params.numel())
-
-                _log_info(
-                    f" => {module_name} of shape {weight_shape}: v={v_params.numel()}, g={g_params.numel()}"
-                )
-                g2v_dim[g_full_name] = v_params.shape.numel()
-                v2g[v_full_name] = g_full_name
-
-                if bias_flows:
+            if isinstance(module, (layers.Conv2d, layers.Linear)):
+                if weights_posterior == 'realnvp':
+                    assert weight_normalization, f'RealNVP is currently handled only with weight_norm'
+                    # add vs to point estimates
+                    v_full_name = f"{module_name}.weight_prior.p_v"
+                    v_params = get_module_by_name(model, v_full_name)
+                    v_params = (
+                        v_params.clone()
+                        .detach()
+                        .requires_grad_(True)
+                        .to(device("try_cuda"))
+                    )
+                    point_estimates[v_full_name] = v_params
+                    # add gs to flow targets
+                    g_full_name = f"{module_name}.weight_prior.p_g"
+                    g_params = get_module_by_name(model, g_full_name)
+                    realnvps[g_full_name] = build_realnvp(g_params.numel())
+                    #
+                    _log_info(
+                        f"Module {module_name}: v={v_params.numel()}, g={g_params.numel()} (RealNVP)"
+                    )
+                    g2v_dim[g_full_name] = v_params.shape.numel()
+                    v2g[v_full_name] = g_full_name
+                elif weights_posterior == 'mfvi':
+                    if weight_normalization:
+                        # add vs
+                        v_full_name = f"{module_name}.weight_prior.p_v"
+                        v_params = get_module_by_name(model, v_full_name)
+                        loc = (
+                            v_params.clone()
+                            .detach()
+                            .requires_grad_(True)
+                            .to(device("try_cuda"))
+                        )
+                        unnormalized_scale = (
+                            t.randn_like(loc).requires_grad_(True).to(device("try_cuda"))
+                        )
+                        gaussians[v_full_name] = (loc, unnormalized_scale)
+                        # add gs
+                        g_full_name = f"{module_name}.weight_prior.p_g"
+                        g_params = get_module_by_name(model, g_full_name)
+                        loc = (
+                            g_params.clone()
+                            .detach()
+                            .requires_grad_(True)
+                            .to(device("try_cuda"))
+                        )
+                        unnormalized_scale = (
+                            t.randn_like(loc).requires_grad_(True).to(device("try_cuda"))
+                        )
+                        gaussians[g_full_name] = (loc, unnormalized_scale)
+                        _log_info(
+                            f"Module {module_name}: v={v_params.numel()} (MFVI), g={g_params.numel()} (MFVI)"
+                        )
+                    else:
+                        # add params
+                        p_full_name = f"{module_name}.weight_prior.p"
+                        p_params = get_module_by_name(model, p_full_name)
+                        loc = (
+                            p_params.clone()
+                            .detach()
+                            .requires_grad_(True)
+                            .to(device("try_cuda"))
+                        )
+                        unnormalized_scale = (
+                            t.randn_like(loc).requires_grad_(True).to(device("try_cuda"))
+                        )
+                        gaussians[p_full_name] = (loc, unnormalized_scale)
+                        _log_info(
+                            f"Module {module_name}: p={p_params.numel()} (MFVI)"
+                        )
+                if bias_posterior == 'realnvp':
                     bias_module_name = f"{module_name}.bias_prior"
                     if get_module_by_name(model, bias_module_name) is not None:
                         bias_full_name = f"{module_name}.bias_prior.p"
                         bias_params = get_module_by_name(model, bias_full_name)
                         realnvps[bias_full_name] = build_realnvp(bias_params.numel())
-
-        # add point estimates for selected parameters:
-        def train_pointwise_selector(parameter_name: str) -> bool:
-            """If you want to force some pointwise parameter, return True for it."""
-            if learn_distributions:
-                if "bias" in parameter_name:
-                    return learn_distributions_biases
-                else:
-                    return True
-            else:
-                return False
-
+                        _log_info(
+                            f"Module {module_name}: bias={bias_params.numel()} (RealNVP)"
+                        )
+                elif bias_posterior == 'mfvi':
+                    bias_module_name = f"{module_name}.bias_prior"
+                    if get_module_by_name(model, bias_module_name) is not None:
+                        bias_full_name = f"{module_name}.bias_prior.p"
+                        bias_params = get_module_by_name(model, bias_full_name)
+                        loc = (
+                            bias_params.clone()
+                            .detach()
+                            .requires_grad_(True)
+                            .to(device("try_cuda"))
+                        )
+                        unnormalized_scale = (
+                            t.randn_like(loc).requires_grad_(True).to(device("try_cuda"))
+                        )
+                        gaussians[bias_full_name] = (loc, unnormalized_scale)
+                        _log_info(
+                            f"Module {module_name}: bias={bias_params.numel()} (MFVI)"
+                        )
+        # all parameters unaccounted for will be modeled as pointwise parameters
         for n, p in model.named_parameters():
             if is_parameter_already_handled(n):
                 continue
-            if train_pointwise_selector(n):
-                _log_info(f"Parameter {n} will be trained pointwise")
-                # create a variable of the same shape:
-                weights = p.clone().detach().requires_grad_(True)
-                point_estimates[n] = weights
-
-        # all parameters unaccounted for will be modeled as factorized Gaussians
-        for n, p in model.named_parameters():
-            if is_parameter_already_handled(n):
-                continue
-
-            _log_info(f"Parameter {n} will be modeled with a factorized Gaussian")
-            # create variables of the same shape:
-            loc = p.clone().detach().requires_grad_(True).to(device("try_cuda"))
-            unnormalized_scale = (
-                t.randn_like(p).requires_grad_(True).to(device("try_cuda"))
-            )
-
-            gaussians[n] = [loc, unnormalized_scale]
+            _log_info(f"Parameter {n} will be trained pointwise")
+            # create a variable of the same shape:
+            weights = p.clone().detach().requires_grad_(True)
+            point_estimates[n] = weights
 
         # gather parameters to be trained for all approximation types
         approximation_params = list(
@@ -425,7 +460,7 @@ def main():
 
                     samples[name] = sample
                     theta_dim_per_g = (
-                        g2v_dim.get(name, p.shape.numel()) / p.shape.numel()
+                            g2v_dim.get(name, p.shape.numel()) / p.shape.numel()
                     )  # how many thetas are created from each g; if no associated v -> multiply by 1
                     nlls[name] = nll * theta_dim_per_g
 
@@ -458,10 +493,10 @@ def main():
                     raise Exception(f"I don't know how to sample posterior for {name}!")
 
                 assert (
-                    sample.shape[0] == n_samples
+                        sample.shape[0] == n_samples
                 ), f"parameter={name}({p.shape}) sample.shape={sample.shape} n_samples={n_samples}"
                 assert (
-                    sample.shape[1:] == p.shape
+                        sample.shape[1:] == p.shape
                 ), f"parameter={name}({p.shape}) sample.shape=={sample.shape} p.shape={p.shape}"
                 assert len(nll) == n_samples
 
@@ -532,7 +567,7 @@ def main():
                 _log_info(
                     f"[evaluate_and_store_metrics][step={current_step}] eval.{k}={v}"
                 )
-            if log_mfvi is True:
+            if log_mfvi:
                 for name in gaussians.keys():
                     l, us = gaussians[name]
                     s = softplus(us) + 1e-8
@@ -651,7 +686,7 @@ def main():
                     # preds = model(x); log_likelihood += preds.log_prob(y).sum() * x_train.shape[0]/x.shape[0]
                     log_likelihood += model.log_likelihood(x, y, x_train.shape[0])
 
-                    if learn_distributions:
+                    if weights_posterior in ('mfvi', 'realnvp') or bias_posterior in ('mfvi', 'realnvp'):
                         log_prior += model.log_prior()
 
                 elbo = (log_likelihood + log_prior + entropy) / n_samples_training
