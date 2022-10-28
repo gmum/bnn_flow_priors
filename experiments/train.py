@@ -74,8 +74,6 @@ def main():
         width = 50
         # depth of the model (might not have an effect in some models)
         depth = 3
-        # posterior, e.g. "mfvi", "realnvp"
-        posterior = "mfvi"
         # weight prior, e.g., "gaussian", "laplace", "student-t"
         weight_prior = "gaussian"
         # bias prior, same as above
@@ -125,6 +123,8 @@ def main():
         ood_data = None
         # whether to learn distributions (leaves only log likelihood loss)
         learn_distributions = True
+        # whether to learn distributions also on biases
+        learn_distributions_biases = True
         # whether to log sigma statistics
         log_mfvi = False
         # realnvp posterior settings
@@ -190,11 +190,11 @@ def main():
         epochs,
         schedule,
         learn_distributions,
+        learn_distributions_biases,
         n_samples,
         n_samples_training,
         ood_data,
         metrics_skip,
-        posterior,
         log_mfvi,
         realnvp_m,
         realnvp_num_layers,
@@ -368,7 +368,13 @@ def main():
         # add point estimates for selected parameters:
         def train_pointwise_selector(parameter_name: str) -> bool:
             """If you want to force some pointwise parameter, return True for it."""
-            return not learn_distributions
+            if learn_distributions:
+                if "bias" in parameter_name:
+                    return learn_distributions_biases
+                else:
+                    return True
+            else:
+                return False
 
         for n, p in model.named_parameters():
             if is_parameter_already_handled(n):
@@ -526,10 +532,10 @@ def main():
                 _log_info(
                     f"[evaluate_and_store_metrics][step={current_step}] eval.{k}={v}"
                 )
-            if log_mfvi is True and posterior == "mfvi":
-                for name in scales.keys():
-                    l = locs[name]
-                    s = softplus(scales[name]) + 1e-8
+            if log_mfvi is True:
+                for name in gaussians.keys():
+                    l, us = gaussians[name]
+                    s = softplus(us) + 1e-8
                     r_s = s / l.abs()
                     _run.log_scalar(f"mfvi.{name}.miu.min", l.min(), current_step)
                     _run.log_scalar(f"mfvi.{name}.miu.max", l.max(), current_step)

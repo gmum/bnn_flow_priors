@@ -1,30 +1,42 @@
 #!/bin/bash
 #SBATCH --job-name=bnn_flow
 #SBATCH --qos=normal
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-gpu=4
-#SBATCH --mem-per-gpu=10G
+#SBATCH --gpus=1
+#SBATCH --cpus-per-task=10
+#SBATCH --mem-per-gpu=40G
 
 # singularity path - update if needed
 source user.env
 cd $PROJECT_PATH || exit
 export PYTHONPATH=$PYTHONPATH:$PROJECT_PATH
 
-
-# RealNVP CIFAR with different priors
-for prior in gaussian student-t laplace; do
+# RealNVP MNIST with different priors - same for both weights and biases
 for prior in gaussian; do
   for lr in 0.01 0.001 0.0001; do
-  for lr in 0.001; do
-    srun --gres=gpu:1 --cpus-per-task=4 singularity exec $SINGULARITY_ARGS $SIF_PATH \
+    srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
         python experiments/train.py with \
         posterior=realnvp \
-        data=cifar10_augmented model=googleresnet weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
-        n_samples=300 batch_size=128 lr=$lr epochs=400 \
-        ood_data=svhn save_samples=True &
+        data=mnist model=classificationconvnet weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
+        n_samples=100 batch_size=128 lr=$lr epochs=100 \
+        ood_data=fashion_mnist save_samples=True &
   done
 done
 wait
+
+# RealNVP CIFAR with different priors
+#for prior in gaussian student-t laplace; do
+#for prior in gaussian; do
+#  for lr in 0.01 0.001 0.0001; do
+#  for lr in 0.001; do
+#    srun --gres=gpu:1 --cpus-per-task=4 singularity exec $SINGULARITY_ARGS $SIF_PATH \
+#        python experiments/train.py with \
+#        posterior=realnvp \
+#        data=cifar10_augmented model=googleresnet weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
+#        n_samples=300 batch_size=128 lr=$lr epochs=400 \
+#        ood_data=svhn save_samples=True &
+#  done
+#done
+#wait
 
 # RealNVP MNIST with different priors - same for both weights and biases
 #for prior in gaussian student-t laplace; do
