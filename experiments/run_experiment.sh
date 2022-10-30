@@ -5,21 +5,23 @@
 #SBATCH --cpus-per-task=10
 #SBATCH --mem-per-cpu=2G
 
+
 # singularity path - update if needed
 source user.env
 cd $PROJECT_PATH || exit
 export PYTHONPATH=$PYTHONPATH:$PROJECT_PATH
 
-# RealNVP MNIST with or without biases for different LRs
+
+# RealNVP CIFAR10 with or without biases for different LRs
 for prior in gaussian; do
-  for lr in 0.01 0.001 0.0001; do
+  for lr in 0.01 0.001 0.0001 0.0003 0.00003 0.00001; do
     for bias_posterior in realnvp pointwise; do
       srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
           python experiments/train.py with \
-          data=mnist model=classificationconvnet weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
-          n_samples=100 batch_size=128 lr=$lr epochs=100 \
+          data=cifar10_augmented model=googleresnet weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
+          n_samples=100 batch_size=128 lr=$lr epochs=400 \
           weight_normalization=True weights_posterior=realnvp bias_posterior=$bias_posterior \
-          ood_data=fashion_mnist save_samples=True &
+          ood_data=svhn save_samples=True &
     done
   done
 done
