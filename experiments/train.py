@@ -698,6 +698,8 @@ def main():
                 _run.log_scalar("train.log_prior", log_prior.item(), current_step)
                 _run.log_scalar("train.entropy", entropy.item(), current_step)
                 _run.log_scalar("train.loss", loss_vi.item(), current_step)
+                print(f"{current_step} step: train.entropy = {entropy.item()}")
+                print(f"{current_step} step: train.loss = {loss_vi.item()}")
 
                 optimizer.zero_grad()
                 loss_vi.backward()
