@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=bnn_flow
-#SBATCH --qos=long
+#SBATCH --qos=normal
 #SBATCH --gpus=2
 #SBATCH --cpus-per-task=10
 #SBATCH --mem-per-cpu=2G
