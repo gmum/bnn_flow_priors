@@ -524,7 +524,7 @@ def main():
                 print("-u.log(): ", -u.log())
                 print("-u.log().sum(data_dims): ", -u.log().sum(data_dims))
                 print("u.shape: ", u.shape)
-                print("u.prod(): ", u.prod())
+                print("u.prod(): ", u.prod(data_dims))
                 print("u.prod().log(data_dims): ", u.prod().log(data_dims))
                 print("-u.prod().log(data_dims): ", -u.prod().log(data_dims))
                 log_det_J = -u.log().sum(data_dims)
