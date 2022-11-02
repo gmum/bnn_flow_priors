@@ -507,7 +507,9 @@ def main():
                 v_norm = normalize(v, p=2.0, dim=1)
                 # log det J = \sum_i log 1/u_i = -\sum_i log u_
                 u = v_norm  # TODO NORMALIZATION!
-                log_det_J = -u.log().sum(data_dims)
+                u_abs = t.abs(u)
+                # log_det_J = -u.log().sum(data_dims)
+                log_det_J = -u_abs.log().sum(data_dims)
                 nlls[g_name] += -log_det_J
 
             return nlls, samples
