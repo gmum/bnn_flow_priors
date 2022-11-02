@@ -464,6 +464,7 @@ def main():
                     theta_dim_per_g = (
                             g2v_dim.get(name, p.shape.numel()) / p.shape.numel()
                     )  # how many thetas are created from each g; if no associated v -> multiply by 1
+                    print("theta_dim_per_g: ", theta_dim_per_g)
                     nlls[name] = nll * theta_dim_per_g
 
                 elif name in point_estimates:
