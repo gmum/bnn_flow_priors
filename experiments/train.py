@@ -675,10 +675,12 @@ def main():
                     t.tensor(0.0, device=device("try_cuda")),
                 )
 
+                print(f"{current_step} step: train.entropy = {entropy.item()}")
                 entropy += sum(
                     nll.sum() for nll in nlls.values()
                 )  # sum over samples and then over variables
-
+                print(f"{current_step} step: train.entropy = {entropy.item()}")
+                print("nlls: ", nlls)
                 # iterate and sum over samples:
                 for sample in sample_iter({**posterior_samples, **prior_samples}):
                     overwrite_params(model, sample)

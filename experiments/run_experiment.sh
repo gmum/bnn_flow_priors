@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=bnn_flow
 #SBATCH --qos=normal
-#SBATCH --gpus=2
+#SBATCH --gpus=1
 #SBATCH --cpus-per-task=10
 #SBATCH --mem-per-cpu=2G
 
@@ -18,8 +18,8 @@ for prior in gaussian; do
     for bias_posterior in realnvp pointwise; do
       srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
           python experiments/train.py with \
-          data=cifar10_augmented model=googleresnet weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
-          n_samples=100 batch_size=128 lr=$lr epochs=400 \
+          data=mnist model=classificationconvnet weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
+          n_samples=100 batch_size=128 lr=$lr epochs=100 \
           weight_normalization=True weights_posterior=realnvp bias_posterior=$bias_posterior \
           ood_data=svhn save_samples=True &
     done
