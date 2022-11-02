@@ -523,9 +523,9 @@ def main():
                 print("-u: ", -u)
                 print("-u.log(): ", -u.log())
                 print("-u.log().sum(data_dims): ", -u.log().sum(data_dims))
-                print("u.prod(data_dims): ", u.prod(data_dims))
-                print("u.prod(data_dims).log(): ", u.prod(data_dims).log())
-                print("-u.prod(data_dims).log(): ", -u.prod(data_dims).log())
+                print("u.prod(): ", u.prod())
+                print("u.prod().log(data_dims): ", u.prod().log(data_dims))
+                print("-u.prod().log(data_dims): ", -u.prod().log(data_dims))
                 log_det_J = -u.log().sum(data_dims)
                 print("log_det_J: ", log_det_J)
                 nlls[g_name] += -log_det_J
