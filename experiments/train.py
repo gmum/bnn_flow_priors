@@ -455,6 +455,8 @@ def main():
                     sample, nll = realnvps[name].sample(
                         n_samples, p.numel(), calculate_nll=True
                     )
+                    print("name in realnvps")
+                    print("nll:", nll)
                     sample = sample.reshape(n_samples, *p.size())
                     nll = nll.to(sample.device)
 
