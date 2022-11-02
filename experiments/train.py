@@ -520,6 +520,9 @@ def main():
                 # log det J = \sum_i log 1/u_i = -\sum_i log u_
                 u = v_norm  # TODO NORMALIZATION!
                 print("u: ", u)
+                print("-u: ", -u)
+                print("-u.log(): ", -u.log())
+                print("-u.log().sum(data_dims): ", -u.log().sum(data_dims))
                 log_det_J = -u.log().sum(data_dims)
                 print("log_det_J: ", log_det_J)
                 nlls[g_name] += -log_det_J
