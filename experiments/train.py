@@ -466,6 +466,7 @@ def main():
                     )  # how many thetas are created from each g; if no associated v -> multiply by 1
                     print("theta_dim_per_g: ", theta_dim_per_g)
                     nlls[name] = nll * theta_dim_per_g
+                    print("nll * theta_dim_per_g ", nll * theta_dim_per_g)
 
                 elif name in point_estimates:
                     sample = point_estimates[name]
@@ -513,6 +514,8 @@ def main():
                 log_det_J = -u.log().sum(data_dims)
                 nlls[g_name] += -log_det_J
 
+            print("nlls after for")
+            print(nlls)
             return nlls, samples
 
         def sample_priors(n_samples):
