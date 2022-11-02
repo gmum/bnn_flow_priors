@@ -37,7 +37,7 @@ wait
 #        python experiments/train.py with \
 #        posterior=realnvp \
 #        data=cifar10_augmented model=googleresnet weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
-#        n_samples=300 batch_size=128 lr=$lr epochs=400 \
+#        n_samples=100 batch_size=128 lr=$lr epochs=400 \
 #        ood_data=svhn save_samples=True &
 #  done
 #done
