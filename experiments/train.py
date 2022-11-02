@@ -509,12 +509,19 @@ def main():
 
             # add log determinants for changing variables g to theta
             for v_name, g_name in v2g.items():
+                print("v_name: ", v_name)
+                print("g_name: ", g_name)
                 v = samples[v_name]
+                print("v: ", v)
                 data_dims = list(range(1, len(v.shape)))
+                print("data_dims: ", data_dims)
                 v_norm = normalize(v, p=2.0, dim=1)
+                print("v_norm: ", v_norm)
                 # log det J = \sum_i log 1/u_i = -\sum_i log u_
                 u = v_norm  # TODO NORMALIZATION!
+                print("u: ", u)
                 log_det_J = -u.log().sum(data_dims)
+                print("log_det_J: ", log_det_J)
                 nlls[g_name] += -log_det_J
 
             print("nlls after for")
