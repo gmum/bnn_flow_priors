@@ -504,6 +504,9 @@ def main():
                 ), f"parameter={name}({p.shape}) sample.shape=={sample.shape} p.shape={p.shape}"
                 assert len(nll) == n_samples
 
+            print("nlls before for")
+            print(nlls)
+
             # add log determinants for changing variables g to theta
             for v_name, g_name in v2g.items():
                 v = samples[v_name]
