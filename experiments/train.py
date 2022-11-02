@@ -519,17 +519,19 @@ def main():
                 print("v_norm: ", v_norm)
                 # log det J = \sum_i log 1/u_i = -\sum_i log u_
                 u = v_norm  # TODO NORMALIZATION!
-                print("u: ", u)
-                print("-u: ", -u)
-                print("-u.log(): ", -u.log())
-                print("-u.log().sum(data_dims): ", -u.log().sum(data_dims))
-                u_test = v_norm
-                u_test = t.flatten(u_test, start_dim=1)
-                print("u_test.shape: ", u_test.shape)
-                print("u_test.prod(): ", u_test.prod(1))
-                print("u_test.prod().log(): ", u_test.prod().log())
-                print("-u_test.prod().log(): ", -u_test.prod().log())
-                log_det_J = -u.log().sum(data_dims)
+                u_abs = t.abs(u)
+                # print("u: ", u)
+                # print("-u: ", -u)
+                # print("-u.log(): ", -u.abs().log())
+                # print("-u.log().sum(data_dims): ", -u.log().sum(data_dims))
+                # u_test = v_norm
+                # u_test = t.flatten(u_test, start_dim=1)
+                # print("u_test.shape: ", u_test.shape)
+                # print("u_test.prod(): ", u_test.prod(1))
+                # print("u_test.prod().log(): ", u_test.prod().log())
+                # print("-u_test.prod().log(): ", -u_test.prod().log())
+                # log_det_J = -u.log().sum(data_dims)
+                log_det_J = -u_abs.log().sum(data_dims)
                 print("log_det_J: ", log_det_J)
                 nlls[g_name] += -log_det_J
 
