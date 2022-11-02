@@ -523,6 +523,7 @@ def main():
                 print("-u: ", -u)
                 print("-u.log(): ", -u.log())
                 print("-u.log().sum(data_dims): ", -u.log().sum(data_dims))
+                print("u.shape: ", u.shape)
                 print("u.prod(): ", u.prod())
                 print("u.prod().log(data_dims): ", u.prod().log(data_dims))
                 print("-u.prod().log(data_dims): ", -u.prod().log(data_dims))
