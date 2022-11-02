@@ -523,10 +523,12 @@ def main():
                 print("-u: ", -u)
                 print("-u.log(): ", -u.log())
                 print("-u.log().sum(data_dims): ", -u.log().sum(data_dims))
-                print("u.shape: ", u.shape)
-                print("u.prod(): ", u.prod(data_dims))
-                print("u.prod().log(data_dims): ", u.prod().log(data_dims))
-                print("-u.prod().log(data_dims): ", -u.prod().log(data_dims))
+                u_test = v_norm
+                u_test = t.flatten(u_test, start_dim=1)
+                print("u_test.shape: ", u_test.shape)
+                print("u_test.prod(): ", u_test.prod(1))
+                print("u_test.prod().log(): ", u_test.prod().log())
+                print("-u_test.prod().log(): ", -u_test.prod().log())
                 log_det_J = -u.log().sum(data_dims)
                 print("log_det_J: ", log_det_J)
                 nlls[g_name] += -log_det_J
