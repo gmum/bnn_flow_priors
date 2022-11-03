@@ -128,6 +128,8 @@ def main():
         weights_posterior = None
         # whether to learn distributions on biases (None leaves only log likelihood loss)
         bias_posterior = None
+        # weight of the entropy term for ELBO
+        entropy_weight = 1.0
         # whether to log statistics for mfvi
         log_mfvi = True
         # realnvp posterior settings
@@ -194,6 +196,7 @@ def main():
             weight_normalization,
             weights_posterior,
             bias_posterior,
+            entropy_weight,
             n_samples,
             n_samples_training,
             ood_data,
@@ -348,7 +351,7 @@ def main():
                     _log_info(
                         f"Module {module_name}: v={v_params.numel()}, g={g_params.numel()} (RealNVP)"
                     )
-                    g2v_dim[g_full_name] = v_params.shape.numel()
+                    g2v_dim[g_full_name] = v_params.numel()
                     v2g[v_full_name] = g_full_name
                 elif weights_posterior == 'mfvi':
                     if weight_normalization:
@@ -446,40 +449,40 @@ def main():
 
         #######################################################################
 
-        def sample_posterior(n_samples):
+        def sample_posterior(n_s):
             samples = {}
             nlls = {}
             for name, p in model.named_parameters():
 
                 if name in realnvps:
                     sample, nll = realnvps[name].sample(
-                        n_samples, p.numel(), calculate_nll=True
+                        n_s, p.numel(), calculate_nll=True
                     )
-                    sample = sample.reshape(n_samples, *p.size())
+                    sample = sample.reshape(n_s, *p.size())
                     nll = nll.to(sample.device)
 
                     samples[name] = sample
                     theta_dim_per_g = (
-                            g2v_dim.get(name, p.shape.numel()) / p.shape.numel()
+                            g2v_dim.get(name, p.numel()) / p.numel()
                     )  # how many thetas are created from each g; if no associated v -> multiply by 1
                     nlls[name] = nll * theta_dim_per_g
 
                 elif name in point_estimates:
                     sample = point_estimates[name]
                     sample = sample.expand(
-                        t.Size([n_samples] + [-1 for _ in sample.shape])
+                        t.Size([n_s] + [-1 for _ in sample.shape])
                     )
 
                     samples[name] = sample
                     nll = t.zeros(
-                        n_samples, dtype=sample.dtype
+                        n_s, dtype=sample.dtype
                     )  # not used besides the below assert
                     nll = nll.to(sample.device)
 
                 elif name in gaussians:
                     loc, unnormalized_scale = gaussians[name]
                     q = Normal(loc, softplus(unnormalized_scale) + 1e-8)
-                    sample = q.rsample(t.Size([n_samples]))
+                    sample = q.rsample(t.Size([n_s]))
                     data_dims = list(range(1, len(sample.shape)))
 
                     # calc total NLL for all params (shape==n_samples)
@@ -493,30 +496,27 @@ def main():
                     raise Exception(f"I don't know how to sample posterior for {name}!")
 
                 assert (
-                        sample.shape[0] == n_samples
-                ), f"parameter={name}({p.shape}) sample.shape={sample.shape} n_samples={n_samples}"
+                        sample.shape[0] == n_s
+                ), f"parameter={name}({p.shape}) sample.shape={sample.shape} n_samples={n_s}"
                 assert (
                         sample.shape[1:] == p.shape
                 ), f"parameter={name}({p.shape}) sample.shape=={sample.shape} p.shape={p.shape}"
-                assert len(nll) == n_samples
+                assert len(nll) == n_s
 
             # add log determinants for changing variables g to theta
             for v_name, g_name in v2g.items():
                 v = samples[v_name]
-                data_dims = list(range(1, len(v.shape)))
-                v_norm = normalize(v, p=2.0, dim=1)
+                v_norm = normalize(v.flatten(start_dim=2), p=2.0, dim=1)
                 # log det J = \sum_i log 1/u_i = -\sum_i log u_
-                u = v_norm  # TODO NORMALIZATION!
-                u_abs = t.abs(u)
-                # log_det_J = -u.log().sum(data_dims)
-                log_det_J = -u_abs.log().sum(data_dims)
+                u_abs = t.abs(v_norm)
+                # log_det_J = -u.log().sum(dim=(1, 2))
+                log_det_J = -u_abs.log().sum(dim=(1, 2))
                 nlls[g_name] += -log_det_J
-
             return nlls, samples
 
-        def sample_priors(n_samples):
+        def sample_priors(n_s):
             prior_samples = {
-                name: t.cat(n_samples * [buffer[None, ...]])
+                name: t.cat(n_s * [buffer[None, ...]])
                 for name, buffer in model.named_buffers()
             }
             return prior_samples
@@ -539,13 +539,13 @@ def main():
 
         #######################################################################
 
-        def evaluate_and_store_metrics(current_step, n_samples, calib=True, ood=False):
+        def evaluate_and_store_metrics(current_step, n_s, calib=True, ood=False):
             _log_info("evaluate_and_store_metrics")
             training = model.training
             model.eval()
 
-            _, posterior_samples = sample_posterior(n_samples)
-            prior_samples = sample_priors(n_samples)
+            _, posterior_samples = sample_posterior(n_s)
+            prior_samples = sample_priors(n_s)
             samples = {**posterior_samples, **prior_samples}
             # _log_info(
             #     "[evaluate_and_store_metrics] samples ({n_samples}):"
@@ -605,13 +605,13 @@ def main():
 
         # iterate over samples (taken from the original code):
         def _n_samples_len(samples):
-            n_samples = min(len(v) for _, v in samples.items())
-            if not all((len(v) == n_samples) for _, v in samples.items()):
+            n_s = min(len(v) for _, v in samples.items())
+            if not all((len(v) == n_s) for _, v in samples.items()):
                 warnings.warn(
                     "Not all samples have the same length. "
                     "Setting n_samples to the minimum."
                 )
-            return n_samples
+            return n_s
 
         def sample_iter(samples):
             for i in range(_n_samples_len(samples)):
@@ -677,6 +677,7 @@ def main():
                     t.tensor(0.0, device=device("try_cuda")),
                 )
 
+
                 entropy += sum(
                     nll.sum() for nll in nlls.values()
                 )  # sum over samples and then over variables
@@ -691,7 +692,7 @@ def main():
                     if weights_posterior in ('mfvi', 'realnvp') or bias_posterior in ('mfvi', 'realnvp'):
                         log_prior += model.log_prior()
 
-                elbo = (log_likelihood + log_prior + entropy) / n_samples_training
+                elbo = (log_likelihood + log_prior + entropy_weight * entropy) / n_samples_training
                 loss_vi = -elbo
 
                 _run.log_scalar(
