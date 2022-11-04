@@ -137,6 +137,8 @@ def main():
         # realnvp posterior settings
         realnvp_m = 256
         realnvp_num_layers = 8
+        # whether to use rezero trick in normalizing flows or not
+        rezero_trick = False
 
     # decorators
     device = ex.capture(exp_utils.device)
@@ -207,6 +209,7 @@ def main():
             log_stats,
             realnvp_m,
             realnvp_num_layers,
+            rezero_trick,
             _run,
             _log,
     ):
@@ -311,7 +314,7 @@ def main():
                 LeakyReLU(),
                 Linear(m, d // 2),
             )
-            realnvp = RealNVP(net_s, net_t, realnvp_num_layers, flow_prior)
+            realnvp = RealNVP(net_s, net_t, realnvp_num_layers, flow_prior, rezero_trick)
             realnvp.to(device("try_cuda"))
             return realnvp
 

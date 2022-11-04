@@ -5,17 +5,19 @@ from bnn_priors.exp_utils import device
 
 
 class RealNVP(nn.Module):
-    def __init__(self, net_s, net_t, num_layers, prior):
+    def __init__(self, net_s, net_t, num_layers, prior, rezero_trick=False):
         super().__init__()
         self.prior = prior
         self.t = nn.ModuleList([net_t() for _ in range(num_layers)])
         self.s = nn.ModuleList([net_s() for _ in range(num_layers)])
         self.num_flows = num_layers
+        self.alpha = nn.Parameter(torch.zeros(len(self.s))) if rezero_trick else torch.ones((len(self.s)))
+        self.beta = nn.Parameter(torch.zeros(len(self.t))) if rezero_trick else torch.ones((len(self.t)))
 
     def coupling(self, x, index, forward=True):
         (xa, xb) = torch.chunk(x, 2, 1)
-        s = self.s[index](xa)
-        t = self.t[index](xa)
+        s = self.alpha[index] * self.s[index](xa)
+        t = self.beta[index] * self.t[index](xa)
         if forward:
             yb = (xb - t) * torch.exp(-s)
         else:
