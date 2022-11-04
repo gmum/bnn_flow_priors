@@ -128,10 +128,12 @@ def main():
         weights_posterior = None
         # whether to learn distributions on biases (None leaves only log likelihood loss)
         bias_posterior = None
+        # weight of the CE data term for ELBO
+        ce_weight = 1.0
         # weight of the entropy term for ELBO
         entropy_weight = 1.0
-        # whether to log statistics for mfvi
-        log_mfvi = True
+        # whether to log statistics
+        log_stats = True
         # realnvp posterior settings
         realnvp_m = 256
         realnvp_num_layers = 8
@@ -196,12 +198,13 @@ def main():
             weight_normalization,
             weights_posterior,
             bias_posterior,
+            ce_weight,
             entropy_weight,
             n_samples,
             n_samples_training,
             ood_data,
             metrics_skip,
-            log_mfvi,
+            log_stats,
             realnvp_m,
             realnvp_num_layers,
             _run,
@@ -543,7 +546,6 @@ def main():
             _log_info("evaluate_and_store_metrics")
             training = model.training
             model.eval()
-
             _, posterior_samples = sample_posterior(n_s)
             prior_samples = sample_priors(n_s)
             samples = {**posterior_samples, **prior_samples}
@@ -551,7 +553,6 @@ def main():
             #     "[evaluate_and_store_metrics] samples ({n_samples}):"
             #     + ", ".join(f"{p}:{s.shape}" for p, s in samples.items())
             # )
-
             results = exp_utils.evaluate_model(
                 model=model,
                 dataloader_test=dataloader_test,
@@ -569,7 +570,8 @@ def main():
                 _log_info(
                     f"[evaluate_and_store_metrics][step={current_step}] eval.{k}={v}"
                 )
-            if log_mfvi:
+            if log_stats:
+                # stats for MFVI
                 for name in gaussians.keys():
                     l, us = gaussians[name]
                     s = softplus(us) + 1e-8
@@ -578,14 +580,14 @@ def main():
                     _run.log_scalar(f"mfvi.{name}.miu.max", l.max(), current_step)
                     _run.log_scalar(f"mfvi.{name}.miu.mean", l.mean(), current_step)
                     _run.log_scalar(f"mfvi.{name}.miu.median", l.median(), current_step)
-                    _run.log_scalar(f"mfvi.{name}.miu.std", l.std(), current_step)
+                    _run.log_scalar(f"mfvi.{name}.miu.std", l.std(unbiased=False), current_step)
                     _run.log_scalar(f"mfvi.{name}.sigma.min", s.min(), current_step)
                     _run.log_scalar(f"mfvi.{name}.sigma.max", s.max(), current_step)
                     _run.log_scalar(f"mfvi.{name}.sigma.mean", s.mean(), current_step)
                     _run.log_scalar(
                         f"mfvi.{name}.sigma.median", s.median(), current_step
                     )
-                    _run.log_scalar(f"mfvi.{name}.sigma.std", s.std(), current_step)
+                    _run.log_scalar(f"mfvi.{name}.sigma.std", s.std(unbiased=False), current_step)
                     _run.log_scalar(
                         f"mfvi.{name}.rel_sigma.min", r_s.min(), current_step
                     )
@@ -599,8 +601,28 @@ def main():
                         f"mfvi.{name}.rel_sigma.median", r_s.median(), current_step
                     )
                     _run.log_scalar(
-                        f"mfvi.{name}.rel_sigma.std", r_s.std(), current_step
+                        f"mfvi.{name}.rel_sigma.std", r_s.std(unbiased=False), current_step
                     )
+                # stats for samples from RealNVP
+                for name in realnvps.keys():
+                    s = posterior_samples[name]
+                    stds, means = t.std_mean(s, dim=0, unbiased=False)
+                    std_to_mean = stds / means.abs()
+                    _run.log_scalar(f"samples.realnvp.{name}.means.min", means.min(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{name}.means.max", means.max(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{name}.means.mean", means.mean(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{name}.means.median", means.median(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{name}.means.std", means.std(unbiased=False), current_step)
+                    _run.log_scalar(f"samples.realnvp.{name}.stds.min", stds.min(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{name}.stds.max", stds.max(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{name}.stds.mean", stds.mean(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{name}.stds.median", stds.median(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{name}.stds.std", stds.std(unbiased=False), current_step)
+                    _run.log_scalar(f"samples.realnvp.{name}.std_to_mean.min", std_to_mean.min(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{name}.std_to_mean.max", std_to_mean.max(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{name}.std_to_mean.mean", std_to_mean.mean(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{name}.std_to_mean.median", std_to_mean.median(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{name}.std_to_mean.std", std_to_mean.std(unbiased=False), current_step)
             model.train(training)
 
         # iterate over samples (taken from the original code):
@@ -692,7 +714,7 @@ def main():
                     if weights_posterior in ('mfvi', 'realnvp') or bias_posterior in ('mfvi', 'realnvp'):
                         log_prior += model.log_prior()
 
-                elbo = (log_likelihood + log_prior + entropy_weight * entropy) / n_samples_training
+                elbo = (ce_weight * log_likelihood + log_prior + entropy_weight * entropy) / n_samples_training
                 loss_vi = -elbo
 
                 _run.log_scalar(
