@@ -11,6 +11,7 @@ from neptune.new.integrations.python_logger import NeptuneHandler
 from neptune.new.integrations.sacred import NeptuneObserver
 from sacred import Experiment
 from sacred.utils import apply_backspaces_and_linefeeds
+from torch import _weight_norm
 from torch.distributions import Normal, MultivariateNormal
 from torch.nn import Sequential, Linear, LeakyReLU, Tanh
 from torch.nn.functional import softplus, normalize
@@ -326,12 +327,21 @@ def main():
                          or name in point_estimates
                          or name in gaussians
         )
+        p2g, g2p, g2v, v2g, g2v_dim = {}, {}, {}, {}, {}
         if weight_normalization:
             for module_name, module in model.named_modules():
                 if isinstance(module, (layers.Conv2d, layers.Linear)):
                     weight_norm(module.weight_prior, name="p")
+                    p_full_name = f"{module_name}.weight_prior.p"
+                    v_full_name = f"{module_name}.weight_prior.p_v"
+                    g_full_name = f"{module_name}.weight_prior.p_g"
+                    p2g[p_full_name] = g_full_name
+                    g2p[g_full_name] = p_full_name
+                    v2g[v_full_name] = g_full_name
+                    g2v[g_full_name] = v_full_name
+                    v_params = get_module_by_name(model, v_full_name)
+                    g2v_dim[g_full_name] = v_params.numel()
         # Building RealNVP for selected layers
-        v2g, g2v_dim = {}, {}  # matching flow variables and pointwise variables
         for module_name, module in model.named_modules():
             if isinstance(module, (layers.Conv2d, layers.Linear)):
                 if weights_posterior == 'realnvp':
@@ -354,8 +364,6 @@ def main():
                     _log_info(
                         f"Module {module_name}: v={v_params.numel()}, g={g_params.numel()} (RealNVP)"
                     )
-                    g2v_dim[g_full_name] = v_params.numel()
-                    v2g[v_full_name] = g_full_name
                 elif weights_posterior == 'mfvi':
                     if weight_normalization:
                         # add vs
@@ -605,24 +613,29 @@ def main():
                     )
                 # stats for samples from RealNVP
                 for name in realnvps.keys():
-                    s = posterior_samples[name]
-                    stds, means = t.std_mean(s, dim=0, unbiased=False)
+                    v_name = g2v[name]
+                    p_name = g2p[name]
+                    g_samples = posterior_samples[name]
+                    v_samples = posterior_samples[v_name]
+                    # WARNING seems we use non-stable torch API here
+                    p_samples = _weight_norm(v_samples, g_samples, dim=1)
+                    stds, means = t.std_mean(p_samples, dim=0, unbiased=False)
                     std_to_mean = stds / means.abs()
-                    _run.log_scalar(f"samples.realnvp.{name}.means.min", means.min(), current_step)
-                    _run.log_scalar(f"samples.realnvp.{name}.means.max", means.max(), current_step)
-                    _run.log_scalar(f"samples.realnvp.{name}.means.mean", means.mean(), current_step)
-                    _run.log_scalar(f"samples.realnvp.{name}.means.median", means.median(), current_step)
-                    _run.log_scalar(f"samples.realnvp.{name}.means.std", means.std(unbiased=False), current_step)
-                    _run.log_scalar(f"samples.realnvp.{name}.stds.min", stds.min(), current_step)
-                    _run.log_scalar(f"samples.realnvp.{name}.stds.max", stds.max(), current_step)
-                    _run.log_scalar(f"samples.realnvp.{name}.stds.mean", stds.mean(), current_step)
-                    _run.log_scalar(f"samples.realnvp.{name}.stds.median", stds.median(), current_step)
-                    _run.log_scalar(f"samples.realnvp.{name}.stds.std", stds.std(unbiased=False), current_step)
-                    _run.log_scalar(f"samples.realnvp.{name}.std_to_mean.min", std_to_mean.min(), current_step)
-                    _run.log_scalar(f"samples.realnvp.{name}.std_to_mean.max", std_to_mean.max(), current_step)
-                    _run.log_scalar(f"samples.realnvp.{name}.std_to_mean.mean", std_to_mean.mean(), current_step)
-                    _run.log_scalar(f"samples.realnvp.{name}.std_to_mean.median", std_to_mean.median(), current_step)
-                    _run.log_scalar(f"samples.realnvp.{name}.std_to_mean.std", std_to_mean.std(unbiased=False), current_step)
+                    _run.log_scalar(f"samples.realnvp.{p_name}.means.min", means.min(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{p_name}.means.max", means.max(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{p_name}.means.mean", means.mean(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{p_name}.means.median", means.median(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{p_name}.means.std", means.std(unbiased=False), current_step)
+                    _run.log_scalar(f"samples.realnvp.{p_name}.stds.min", stds.min(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{p_name}.stds.max", stds.max(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{p_name}.stds.mean", stds.mean(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{p_name}.stds.median", stds.median(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{p_name}.stds.std", stds.std(unbiased=False), current_step)
+                    _run.log_scalar(f"samples.realnvp.{p_name}.std_to_mean.min", std_to_mean.min(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{p_name}.std_to_mean.max", std_to_mean.max(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{p_name}.std_to_mean.mean", std_to_mean.mean(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{p_name}.std_to_mean.median", std_to_mean.median(), current_step)
+                    _run.log_scalar(f"samples.realnvp.{p_name}.std_to_mean.std", std_to_mean.std(unbiased=False), current_step)
             model.train(training)
 
         # iterate over samples (taken from the original code):
