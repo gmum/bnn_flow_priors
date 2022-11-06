@@ -13,19 +13,24 @@ export PYTHONPATH=$PYTHONPATH:$PROJECT_PATH
 
 
 # RealNVP CIFAR10 with or without biases for different LRs
-#for prior in gaussian; do
-#  for lr in 0.01 0.001 0.0001 0.0003 0.00003 0.00001; do
-#    for bias_posterior in realnvp pointwise; do
-#      srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
-#          python experiments/train.py with \
-#          data=cifar10_augmented model=googleresnet weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
-#          n_samples=100 batch_size=128 lr=$lr epochs=400 \
-#          weight_normalization=True weights_posterior=realnvp bias_posterior=$bias_posterior \
-#          ood_data=svhn save_samples=True &
-#    done
-#  done
-#done
-#wait
+for prior in gaussian; do
+  for lr in 0.01 0.001 0.0001 0.0003 0.00003 0.00001; do
+    for bias_posterior in realnvp pointwise; do
+      for add_change_log_det_J in True False; do
+        for rezero_trick in True False; do
+          srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
+              python experiments/train.py with \
+              data=cifar10_augmented model=googleresnet weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
+              n_samples=100 batch_size=128 lr=$lr epochs=50 \
+              weight_normalization=True weights_posterior=realnvp bias_posterior=$bias_posterior \
+              rezero_trick=$rezero_trick add_change_log_det_J=$add_change_log_det_J \
+              ood_data=svhn save_samples=True &
+        done
+      done
+    done
+  done
+done
+wait
 
 # RealNVP MNIST with or without biases for different LRs
 #for prior in gaussian; do
@@ -46,20 +51,20 @@ export PYTHONPATH=$PYTHONPATH:$PROJECT_PATH
 #wait
 
 # RealNVP MNIST sanity check - is our posterior $N(0, 1)$ without the cross entropy loss term?
-bias_posterior="pointwise"
-prior="gaussian"
-lr=0.001
-entropy_weight=1.0
-for ce_weight in 0.0 1.0; do
-  srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
-      python experiments/train.py with \
-      data=mnist model=classificationconvnet weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
-      n_samples=100 batch_size=128 lr=$lr epochs=100 \
-      weight_normalization=True weights_posterior=realnvp bias_posterior=$bias_posterior \
-      ce_weight=$ce_weight entropy_weight=$entropy_weight \
-      ood_data=fashion_mnist save_samples=True &
-done
-wait
+#bias_posterior="pointwise"
+#prior="gaussian"
+#lr=0.001
+#entropy_weight=1.0
+#for ce_weight in 0.0 1.0; do
+#  srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
+#      python experiments/train.py with \
+#      data=mnist model=classificationconvnet weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
+#      n_samples=100 batch_size=128 lr=$lr epochs=100 \
+#      weight_normalization=True weights_posterior=realnvp bias_posterior=$bias_posterior \
+#      ce_weight=$ce_weight entropy_weight=$entropy_weight \
+#      ood_data=fashion_mnist save_samples=True &
+#done
+#wait
 
 
 ## PREVIOUS OUTDATED RUN SCRIPTS:
