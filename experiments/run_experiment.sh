@@ -14,7 +14,7 @@ export PYTHONPATH=$PYTHONPATH:$PROJECT_PATH
 
 # RealNVP CIFAR10 with or without biases for different LRs
 for prior in gaussian; do
-  for lr in 0.01 0.001 0.0001 0.0003 0.00003 0.00001; do
+  for lr in 0.001 0.0001 0.0003 0.00001; do
     for bias_posterior in realnvp pointwise; do
       for add_change_log_det_J in True False; do
         for rezero_trick in True False; do
