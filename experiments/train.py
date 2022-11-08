@@ -140,6 +140,8 @@ def main():
         realnvp_num_layers = 8
         # whether to use rezero trick in normalizing flows or not
         rezero_trick = False
+        # whether to add log det Jacobian change to entropy
+        add_change_log_det_J = True
 
     # decorators
     device = ex.capture(exp_utils.device)
@@ -211,6 +213,7 @@ def main():
             realnvp_m,
             realnvp_num_layers,
             rezero_trick,
+            add_change_log_det_J,
             _run,
             _log,
     ):
@@ -517,15 +520,16 @@ def main():
                 ), f"parameter={name}({p.shape}) sample.shape=={sample.shape} p.shape={p.shape}"
                 assert len(nll) == n_s
 
-            # add log determinants for changing variables g to theta
-            for v_name, g_name in v2g.items():
-                v = samples[v_name]
-                v_norm = normalize(v.flatten(start_dim=2), p=2.0, dim=1)
-                # log det J = \sum_i log 1/u_i = -\sum_i log u_
-                u_abs = t.abs(v_norm)
-                # log_det_J = -u.log().sum(dim=(1, 2))
-                log_det_J = -u_abs.log().sum(dim=(1, 2))
-                nlls[g_name] += -log_det_J
+            if add_change_log_det_J:
+                # add log determinants for changing variables g to theta
+                for v_name, g_name in v2g.items():
+                    v = samples[v_name]
+                    v_norm = normalize(v.flatten(start_dim=2), p=2.0, dim=1)
+                    # log det J = \sum_i log 1/u_i = -\sum_i log u_
+                    u_abs = t.abs(v_norm)
+                    # log_det_J = -u.log().sum(dim=(1, 2))
+                    log_det_J = -u_abs.log().sum(dim=(1, 2))
+                    nlls[g_name] += -log_det_J
             return nlls, samples
 
         def sample_priors(n_s):
