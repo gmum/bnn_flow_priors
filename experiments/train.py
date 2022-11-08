@@ -616,12 +616,15 @@ def main():
                     )
                 # stats for samples from RealNVP
                 for name in realnvps.keys():
-                    v_name = g2v[name]
-                    p_name = g2p[name]
-                    g_samples = posterior_samples[name]
-                    v_samples = posterior_samples[v_name]
-                    # WARNING seems we use non-stable torch API here
-                    p_samples = _weight_norm(v_samples, g_samples, dim=1)
+                    if name in g2v:
+                        v_name = g2v[name]
+                        p_name = g2p[name]
+                        g_samples = posterior_samples[name]
+                        v_samples = posterior_samples[v_name]
+                        # WARNING seems we use non-stable torch API here
+                        p_samples = _weight_norm(v_samples, g_samples, dim=1)
+                    else:
+                        p_samples = posterior_samples[name]
                     stds, means = t.std_mean(p_samples, dim=0, unbiased=False)
                     std_to_mean = stds / means.abs()
                     _run.log_scalar(f"samples.realnvp.{p_name}.means.min", means.min(), current_step)
