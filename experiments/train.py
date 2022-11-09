@@ -6,6 +6,7 @@ from itertools import chain
 from pathlib import Path
 
 import neptune.new as neptune
+import torch
 import torch as t
 from neptune.new.integrations.python_logger import NeptuneHandler
 from neptune.new.integrations.sacred import NeptuneObserver
@@ -116,7 +117,7 @@ def main():
         # whether to use batch normalization
         batchnorm = True
         # device to use, "cpu", "cuda:0", "try_cuda"
-        device = "try_cuda"
+        device = "cuda:0"
         # whether the samples should be saved
         # TODO implement?
         save_samples = True
@@ -136,8 +137,8 @@ def main():
         # whether to log statistics
         log_stats = True
         # realnvp posterior settings
-        realnvp_m = 256
-        realnvp_num_layers = 8
+        realnvp_m = 128
+        realnvp_num_layers = 4
         # whether to use rezero trick in normalizing flows or not
         rezero_trick = False
         # whether to add log det Jacobian change to entropy
@@ -286,6 +287,10 @@ def main():
             del model_sd
         model.to(device("try_cuda"))
 
+        _log_info(f"Model priors:")
+        for name, buffer in model.named_buffers():
+            _log_info(f"Prior {name}={buffer}")
+
         _log_info(f"load_samples={load_samples}")
         _log_info(f"init_method={init_method}")
 
@@ -368,7 +373,7 @@ def main():
                     realnvps[g_full_name] = build_realnvp(g_params.numel())
                     #
                     _log_info(
-                        f"Module {module_name}: v={v_params.numel()}, g={g_params.numel()} (RealNVP)"
+                        f"Module {module_name} ({type(module)}): v={v_params.numel()}, g={g_params.numel()} (RealNVP)"
                     )
                 elif weights_posterior == 'mfvi':
                     if weight_normalization:
@@ -399,7 +404,7 @@ def main():
                         )
                         gaussians[g_full_name] = (loc, unnormalized_scale)
                         _log_info(
-                            f"Module {module_name}: v={v_params.numel()} (MFVI), g={g_params.numel()} (MFVI)"
+                            f"Module {module_name} ({type(module)}): v={v_params.numel()} (MFVI), g={g_params.numel()} (MFVI)"
                         )
                     else:
                         # add params
@@ -416,16 +421,17 @@ def main():
                         )
                         gaussians[p_full_name] = (loc, unnormalized_scale)
                         _log_info(
-                            f"Module {module_name}: p={p_params.numel()} (MFVI)"
+                            f"Module {module_name} ({type(module)}): p={p_params.numel()} (MFVI)"
                         )
                 if bias_posterior == 'realnvp':
                     bias_module_name = f"{module_name}.bias_prior"
-                    if get_module_by_name(model, bias_module_name) is not None:
+                    bias_module = get_module_by_name(model, bias_module_name)
+                    if bias_module is not None:
                         bias_full_name = f"{module_name}.bias_prior.p"
                         bias_params = get_module_by_name(model, bias_full_name)
                         realnvps[bias_full_name] = build_realnvp(bias_params.numel())
                         _log_info(
-                            f"Module {module_name}: bias={bias_params.numel()} (RealNVP)"
+                            f"Module {module_name} ({type(module)}): bias={bias_params.numel()} (RealNVP)"
                         )
                 elif bias_posterior == 'mfvi':
                     bias_module_name = f"{module_name}.bias_prior"
@@ -443,7 +449,7 @@ def main():
                         )
                         gaussians[bias_full_name] = (loc, unnormalized_scale)
                         _log_info(
-                            f"Module {module_name}: bias={bias_params.numel()} (MFVI)"
+                            f"Module {module_name} ({type(module)}): bias={bias_params.numel()} (MFVI)"
                         )
         # all parameters unaccounted for will be modeled as pointwise parameters
         for n, p in model.named_parameters():
@@ -628,6 +634,7 @@ def main():
                         # WARNING seems we use non-stable torch API here
                         p_samples = _weight_norm(v_samples, g_samples, dim=1)
                     else:
+                        p_name = name
                         p_samples = posterior_samples[name]
                     stds, means = t.std_mean(p_samples, dim=0, unbiased=False)
                     std_to_mean = stds / means.abs()
@@ -645,7 +652,8 @@ def main():
                     _run.log_scalar(f"samples.realnvp.{p_name}.std_to_mean.max", std_to_mean.max(), current_step)
                     _run.log_scalar(f"samples.realnvp.{p_name}.std_to_mean.mean", std_to_mean.mean(), current_step)
                     _run.log_scalar(f"samples.realnvp.{p_name}.std_to_mean.median", std_to_mean.median(), current_step)
-                    _run.log_scalar(f"samples.realnvp.{p_name}.std_to_mean.std", std_to_mean.std(unbiased=False), current_step)
+                    _run.log_scalar(f"samples.realnvp.{p_name}.std_to_mean.std", std_to_mean.std(unbiased=False),
+                                    current_step)
             model.train(training)
 
         # iterate over samples (taken from the original code):
@@ -721,7 +729,6 @@ def main():
                     t.tensor(0.0, device=device("try_cuda")),
                     t.tensor(0.0, device=device("try_cuda")),
                 )
-
 
                 entropy += sum(
                     nll.sum() for nll in nlls.values()
