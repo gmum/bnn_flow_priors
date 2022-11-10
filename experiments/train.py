@@ -75,7 +75,7 @@ def main():
         # width of the model (might not have an effect in some models)
         width = 50
         # depth of the model (might not have an effect in some models)
-        depth = 3
+        depth = None
         # weight prior, e.g., "gaussian", "laplace", "student-t"
         weight_prior = "gaussian"
         # bias prior, same as above
@@ -778,7 +778,7 @@ def main():
     ex.run_commandline()
     # log artifacts
     # TODO uncomment if models are to be uploaded to neptune/mongodb etc.
-    ex.add_artifact(str(state_path))
+    # ex.add_artifact(str(state_path))
     # stop neptune
     neptune_run.stop()
 

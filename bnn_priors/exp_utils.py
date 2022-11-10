@@ -123,6 +123,8 @@ def get_model(x_train, y_train, model, width, depth, weight_prior, weight_loc,
     elif model == "raobdensenet":
         net = RaoBDenseNet(x_train, y_train, width, noise_std=LogNormal((), -1., 0.2)).to(x_train)
     elif model == "classificationdensenet":
+        if depth is None:
+            depth = 3
         net = ClassificationDenseNet(x_train.size(-1), y_train.max()+1, width, depth, softmax_temp=1.,
                         prior_w=weight_prior, loc_w=weight_loc, std_w=weight_scale,
                         prior_b=bias_prior, loc_b=bias_loc, std_b=bias_scale, scaling_fn=scaling_fn,
@@ -146,6 +148,8 @@ def get_model(x_train, y_train, model, width, depth, weight_prior, weight_loc,
             network_class = bnn_priors.models.DataDrivenDoubleGammaClassificationConvNet
         else:
             raise ValueError("model="+model)
+        if depth is None:
+            depth = 3
         net = network_class(in_channels, img_height, y_train.max()+1, width, depth, softmax_temp=1.,
                         prior_w=weight_prior, loc_w=weight_loc, std_w=weight_scale,
                         prior_b=bias_prior, loc_b=bias_loc, std_b=bias_scale, scaling_fn=scaling_fn,
@@ -184,23 +188,31 @@ def get_model(x_train, y_train, model, width, depth, weight_prior, weight_loc,
                             bn=batchnorm, softmax_temp=1., weight_prior_params=weight_prior_params,
                             bias_prior_params=bias_prior_params).to(x_train)
     elif model == "googleresnet":
-        net = ResNet(prior_w=weight_prior, loc_w=weight_loc, std_w=weight_scale, depth=20,
+        if depth is None:
+            depth = 20
+        net = ResNet(prior_w=weight_prior, loc_w=weight_loc, std_w=weight_scale, depth=depth,
                      prior_b=bias_prior, loc_b=bias_loc, std_b=bias_scale, scaling_fn=scaling_fn,
                      bn=batchnorm, softmax_temp=1., weight_prior_params=weight_prior_params,
                      bias_prior_params=bias_prior_params).to(x_train)
     elif model == "datadriven_mvt_googleresnet":
+        if depth is None:
+            depth = 20
         net = bnn_priors.models.DataDrivenMVTGoogleResNet(
-            softmax_temp=1., depth=20, num_classes=10, bn=batchnorm).to(x_train)
+            softmax_temp=1., depth=depth, num_classes=10, bn=batchnorm).to(x_train)
     elif model == "decreasing_mvt_googleresnet":
+        if depth is None:
+            depth = 20
         net = bnn_priors.models.DecreasingMVTGoogleResNet(
             prior_w=weight_prior, loc_w=weight_loc, std_w=weight_scale,
-            depth=20, prior_b=bias_prior, loc_b=bias_loc, std_b=bias_scale,
+            depth=depth, prior_b=bias_prior, loc_b=bias_loc, std_b=bias_scale,
             scaling_fn=scaling_fn, bn=batchnorm, softmax_temp=1.,
             weight_prior_params=weight_prior_params,
             bias_prior_params=bias_prior_params).to(x_train)
     elif model == "correlatedgoogleresnet":
         # TODO: currently doesn't pass a specific prior to the dense layer, so it uses the default (Normal) one
-        net = CorrelatedResNet(prior_w=weight_prior, loc_w=weight_loc, std_w=weight_scale, depth=20,
+        if depth is None:
+            depth = 20
+        net = CorrelatedResNet(prior_w=weight_prior, loc_w=weight_loc, std_w=weight_scale, depth=depth,
                      prior_b=bias_prior, loc_b=bias_loc, std_b=bias_scale, scaling_fn=scaling_fn,
                      bn=batchnorm, softmax_temp=1., weight_prior_params=weight_prior_params,
                     bias_prior_params=bias_prior_params).to(x_train)
