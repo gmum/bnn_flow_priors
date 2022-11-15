@@ -6,7 +6,6 @@ from itertools import chain
 from pathlib import Path
 
 import neptune.new as neptune
-import torch
 import torch as t
 from neptune.new.integrations.python_logger import NeptuneHandler
 from neptune.new.integrations.sacred import NeptuneObserver
@@ -134,6 +133,8 @@ def main():
         ce_weight = 1.0
         # weight of the entropy term for ELBO
         entropy_weight = 1.0
+        if not isinstance(entropy_weight, dict):
+            entropy_weight = json.loads(entropy_weight)
         # whether to log statistics
         log_stats = True
         # realnvp posterior settings
@@ -711,6 +712,16 @@ def main():
 
         _log_info("Start training")
         current_step = 0
+        last_step = len(dataloader) * epochs
+        if isinstance(entropy_weight, dict):
+            # entropy_weight_schedule = entropy_weight
+            entropy_weight_schedule_type = entropy_weight['type']
+            entropy_weight_initial_value = entropy_weight['initial']
+            entropy_weight_final_value = entropy_weight['final']
+
+        def linear_schedule(current, last, initial, final):
+            return current / last * (final - initial) + initial
+
         evaluate_and_store_metrics(current_step, n_samples)
         for epoch in range(epochs):
             _log_info(f"Epoch {epoch}")
@@ -744,7 +755,16 @@ def main():
                     if weights_posterior in ('mfvi', 'realnvp') or bias_posterior in ('mfvi', 'realnvp'):
                         log_prior += model.log_prior()
 
-                elbo = (ce_weight * log_likelihood + log_prior + entropy_weight * entropy) / n_samples_training
+                if isinstance(entropy_weight, dict):
+                    if entropy_weight['type'] == 'linear':
+                        entropy_weight_value = linear_schedule(current_step, last_step, entropy_weight['initial'],
+                                                               entropy_weight['final'])
+                    else:
+                        raise NotImplementedError()
+                    _run.log_scalar("train.entropy_weight", entropy_weight_value, current_step)
+                else:
+                    entropy_weight_value = entropy_weight
+                elbo = (ce_weight * log_likelihood + log_prior + entropy_weight_value * entropy) / n_samples_training
                 loss_vi = -elbo
 
                 _run.log_scalar(

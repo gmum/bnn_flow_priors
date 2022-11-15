@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=bnn_flow
 #SBATCH --qos=normal
+#SBATCH --ntasks=1
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=10
 #SBATCH --mem-per-cpu=2G
@@ -12,23 +13,24 @@ export PYTHONPATH=$PYTHONPATH:$PROJECT_PATH
 
 # RealNVP CIFAR10 smaller resnet without BN
 for prior in gaussian; do
-  for lr in 0.001 0.0003; do
-    for entropy_weight in 1.0 0.1 0.01 0.001; do
-      srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
-          python experiments/train.py with \
-          data=cifar10_augmented model=googleresnet depth=8 batchnorm=False \
-          weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
-          n_samples=100 batch_size=128 lr=$lr epochs=200 \
-          weight_normalization=True \
-          weights_posterior=realnvp bias_posterior=realnvp \
-          rezero_trick=True add_change_log_det_J=True \
-          entropy_weight=$entropy_weight \
-          realnvp_m=128 realnvp_num_layers=4 \
-          ood_data=svhn save_samples=True &
-    done
+  for lr in 0.001 0.0005 0.0001; do
+#    for entropy_weight in 1.0 0.1 0.01; do
+    srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
+      python experiments/train.py with \
+      data=cifar10_augmented model=googleresnet depth=8 batchnorm=False \
+      weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
+      n_samples=100 batch_size=64 lr=$lr epochs=400 \
+      weight_normalization=True \
+      weights_posterior=realnvp bias_posterior=realnvp \
+      rezero_trick=True add_change_log_det_J=True \
+      entropy_weight="{'type':'linear','initial':0.0,'final':1.0}" \
+      realnvp_m=128 realnvp_num_layers=4 \
+      ood_data=svhn save_samples=True &
   done
 done
 wait
+
+# RealNVP CIFAR10 smaller resnet without BN
 
 # RealNVP CIFAR10 with or without biases for different LRs
 #for prior in gaussian; do
@@ -86,6 +88,47 @@ wait
 #wait
 
 ## PREVIOUS OUTDATED RUN SCRIPTS:
+
+#for prior in gaussian; do
+#  for lr in 0.0005 0.0001; do
+#    for entropy_weight in 1.0 0.1 0.01; do
+#      srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
+#        python experiments/train.py with \
+#        data=cifar10_augmented model=googleresnet depth=8 batchnorm=False \
+#        weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
+#        n_samples=100 batch_size=64 lr=$lr epochs=400 \
+#        weight_normalization=True \
+#        weights_posterior=realnvp bias_posterior=realnvp \
+#        rezero_trick=True add_change_log_det_J=True \
+#        entropy_weight=$entropy_weight \
+#        realnvp_m=128 realnvp_num_layers=4 \
+#        ood_data=svhn save_samples=True &
+#    done
+#  done
+#done
+## also the same small network, but trained pointwise and without weight normalization
+#for lr in 0.001 0.0005 0.0001; do
+#  srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
+#    python experiments/train.py with \
+#    data=cifar10_augmented model=googleresnet depth=8 batchnorm=False \
+#    weight_prior=gaussian weight_scale=1.41 bias_prior=gaussian \
+#    n_samples=100 batch_size=64 lr=$lr epochs=400 \
+#    ood_data=svhn save_samples=True &
+#done
+## also the same small network, but trained with MFVI and without weight normalization
+#for prior in gaussian; do
+#  for lr in 0.001 0.0005 0.0001; do
+#    srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
+#      python experiments/train.py with \
+#      data=cifar10_augmented model=googleresnet depth=8 batchnorm=False \
+#      weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
+#      n_samples=100 batch_size=64 lr=$lr epochs=400 \
+#      weight_normalization=False \
+#      weights_posterior=mfvi bias_posterior=mfvi \
+#      ood_data=svhn save_samples=True &
+#  done
+#done
+#wait
 
 # RealNVP CIFAR with different priors
 #for prior in gaussian student-t laplace; do
