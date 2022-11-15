@@ -564,6 +564,14 @@ def main():
 
         #######################################################################
 
+        def weight_normalize_samples(v_samples, g_samples):
+            assert v_samples.size(0) == g_samples.size(0)
+            normalized_weights = []
+            for i in range(v_samples.size(0)):
+                normalized_weights.append(t._weight_norm(v_samples[i], g_samples[i], dim=0))
+            normalized_weights = t.stack(normalized_weights)
+            return normalized_weights
+
         def evaluate_and_store_metrics(current_step, n_s, calib=True, ood=False):
             _log_info("evaluate_and_store_metrics")
             training = model.training
@@ -633,7 +641,7 @@ def main():
                         g_samples = posterior_samples[name]
                         v_samples = posterior_samples[v_name]
                         # WARNING seems we use non-stable torch API here
-                        p_samples = _weight_norm(v_samples, g_samples, dim=1)
+                        p_samples = weight_normalize_samples(v_samples, g_samples)
                     else:
                         p_name = name
                         p_samples = posterior_samples[name]
