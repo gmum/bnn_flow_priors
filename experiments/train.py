@@ -133,7 +133,7 @@ def main():
         ce_weight = 1.0
         # weight of the entropy term for ELBO
         entropy_weight = 1.0
-        if not isinstance(entropy_weight, dict):
+        if not isinstance(entropy_weight, float) and isinstance(entropy_weight, str):
             entropy_weight = json.loads(entropy_weight)
         # whether to log statistics
         log_stats = True
@@ -531,7 +531,7 @@ def main():
                 # add log determinants for changing variables g to theta
                 for v_name, g_name in v2g.items():
                     v = samples[v_name]
-                    v_norm = normalize(v.flatten(start_dim=2), p=2.0, dim=1)
+                    v_norm = normalize(v.flatten(start_dim=2), p=2.0, dim=2)
                     # log det J = \sum_i log 1/u_i = -\sum_i log u_
                     u_abs = t.abs(v_norm)
                     # log_det_J = -u.log().sum(dim=(1, 2))
