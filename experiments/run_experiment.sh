@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=bnn_flow
 #SBATCH --qos=normal
-#SBATCH --ntasks=2
-#SBATCH --gpus=2
+#SBATCH --ntasks=1
+#SBATCH --gpus=1
 #SBATCH --cpus-per-task=10
 #SBATCH --mem-per-cpu=2G
 
@@ -11,256 +11,92 @@ source user.env
 cd $PROJECT_PATH || exit
 export PYTHONPATH=$PYTHONPATH:$PROJECT_PATH
 
-# RealNVP CIFAR10 smaller resnet without BN
-for prior in gaussian; do
-  for lr in 0.001; do
-    for entropy_weight in 1.0 "{'type':'linear','initial':0.0,'final':1.0}"; do
-      for bias_posterior in pointwise; do
-        srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
-          python experiments/train.py with \
-          data=cifar10_augmented model=googleresnet depth=8 batchnorm=False \
-          weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
-          n_samples=100 batch_size=64 lr=$lr epochs=400 \
-          weight_normalization=True \
-          weights_posterior=realnvp bias_posterior=$bias_posterior \
-          rezero_trick=True add_change_log_det_J=True \
-          entropy_weight=$entropy_weight \
-          realnvp_m=128 realnvp_num_layers=4 \
-          ood_data=svhn save_samples=True &
-      done
-    done
-  done
-done
-wait
-
-# RealNVP CIFAR10 smaller resnet without BN
-
-# RealNVP CIFAR10 with or without biases for different LRs
-#for prior in gaussian; do
-#  for lr in 0.001 0.0001 0.0003 0.00001; do
-#    for bias_posterior in realnvp pointwise; do
-#      for add_change_log_det_J in True False; do
-#        for rezero_trick in True False; do
+# CIFAR10 smaller resnet without BN - pointwise
+#for weight_prior in gaussian; do
+#  for bias_prior in gaussian; do
+#    for weight_posterior in pointwise; do
+#      for bias_posterior in pointwise; do
+#        for lr in 0.01 0.001 0.0001; do
 #          srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
-#              python experiments/train.py with \
-#              data=cifar10_augmented model=googleresnet weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
-#              n_samples=100 batch_size=128 lr=$lr epochs=50 \
-#              weight_normalization=True weights_posterior=realnvp bias_posterior=$bias_posterior \
-#              rezero_trick=$rezero_trick add_change_log_det_J=$add_change_log_det_J \
-#              ood_data=svhn save_samples=True &
+#            python experiments/train.py with \
+#            data=cifar10_augmented model=googleresnet depth=8 batchnorm=False \
+#            weight_prior=$weight_prior weight_scale=1.41 bias_prior=$bias_prior \
+#            weight_posterior=$weight_posterior bias_posterior=$bias_posterior \
+#            n_samples=100 batch_size=64 lr=$lr epochs=400 \
+#            ood_data=svhn &
 #        done
 #      done
 #    done
 #  done
 #done
-#wait
 
-# RealNVP MNIST with or without biases for different LRs
-#for prior in gaussian; do
-#  for lr in 0.001 0.0001; do
-#    for bias_posterior in realnvp pointwise; do
-#      for entropy_weight in 1.0 0.1 0.01 0.001; do
-#        srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
+#kl_weight="{'type':'linear','initial':0.0,'final':1.0}"
+#kl_weight=0.01
+#kl_weight=1.0
+#kl_weight=0.0
+
+# CIFAR10 smaller resnet without BN - RealNVP
+#for weight_prior in gaussian; do
+#  for bias_prior in gaussian; do
+#    for weight_posterior in realnvp; do
+##      for bias_posterior in realnvp pointwise; do
+#      for bias_posterior in pointwise; do
+##        for lr in 0.01 0.001 0.0001; do
+#        for lr in 0.001; do
+#          srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
 #            python experiments/train.py with \
-#            data=mnist model=classificationconvnet weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
-#            n_samples=100 batch_size=128 lr=$lr epochs=100 \
-#            weight_normalization=True weights_posterior=realnvp bias_posterior=$bias_posterior \
-#            entropy_weight=$entropy_weight \
-#            ood_data=fashion_mnist save_samples=True &
+#            data=cifar10_augmented model=googleresnet depth=8 batchnorm=False \
+#            weight_prior=$weight_prior weight_scale=1.41 bias_prior=$bias_prior \
+#            weight_posterior=$weight_posterior bias_posterior=$bias_posterior \
+#            kl_weight=0.0 \
+#            realnvp_m=64 realnvp_num_layers=4 rezero_trick=False \
+#            n_samples=100 batch_size=64 lr=$lr epochs=400 \
+#            ood_data=svhn &
+#        done
 #      done
 #    done
 #  done
 #done
-#wait
 
-# RealNVP MNIST sanity check - is our posterior the same as our prior without the cross entropy loss term?
-#prior="gaussian"
-#lr=0.001
-#entropy_weight=1.0
-#for ce_weight in 0.0 1.0; do
-##for ce_weight in 0.0; do
-#  srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
-#      python experiments/train.py with \
-#      data=mnist model=classificationconvnet weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
-#      n_samples=100 batch_size=128 lr=$lr epochs=100 \
-#      weight_normalization=True weights_posterior=realnvp bias_posterior=pointwise \
-#      ce_weight=$ce_weight entropy_weight=$entropy_weight \
-#      rezero_trick=True \
-#      ood_data=fashion_mnist save_samples=True &
-#done
-#wait
 
-## PREVIOUS OUTDATED RUN SCRIPTS:
-
-#for prior in gaussian; do
-#  for lr in 0.0005 0.0001; do
-#    for entropy_weight in 1.0 0.1 0.01; do
-#      srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
-#        python experiments/train.py with \
-#        data=cifar10_augmented model=googleresnet depth=8 batchnorm=False \
-#        weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
-#        n_samples=100 batch_size=64 lr=$lr epochs=400 \
-#        weight_normalization=True \
-#        weights_posterior=realnvp bias_posterior=realnvp \
-#        rezero_trick=True add_change_log_det_J=True \
-#        entropy_weight=$entropy_weight \
-#        realnvp_m=128 realnvp_num_layers=4 \
-#        ood_data=svhn save_samples=True &
+# CIFAR10 smaller resnet without BN - Bayesian Hypernetworks
+#for weight_prior in gaussian; do
+#  for bias_prior in gaussian; do
+#    for weight_posterior in hypernet; do
+#      for bias_posterior in hypernet pointwise; do
+#        for lr in 0.001; do
+#          srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
+#            python experiments/train.py with \
+#            data=cifar10_augmented model=googleresnet depth=8 batchnorm=False \
+#            weight_prior=$weight_prior weight_scale=1.41 bias_prior=$bias_prior \
+#            weight_posterior=$weight_posterior bias_posterior=$bias_posterior \
+#            n_samples=100 batch_size=64 lr=$lr epochs=400 \
+#            ood_data=svhn &
+#        done
+#      done
 #    done
 #  done
 #done
-## also the same small network, but trained pointwise and without weight normalization
-#for lr in 0.001 0.0005 0.0001; do
-#  srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
-#    python experiments/train.py with \
-#    data=cifar10_augmented model=googleresnet depth=8 batchnorm=False \
-#    weight_prior=gaussian weight_scale=1.41 bias_prior=gaussian \
-#    n_samples=100 batch_size=64 lr=$lr epochs=400 \
-#    ood_data=svhn save_samples=True &
-#done
-## also the same small network, but trained with MFVI and without weight normalization
-#for prior in gaussian; do
-#  for lr in 0.001 0.0005 0.0001; do
-#    srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
-#      python experiments/train.py with \
-#      data=cifar10_augmented model=googleresnet depth=8 batchnorm=False \
-#      weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
-#      n_samples=100 batch_size=64 lr=$lr epochs=400 \
-#      weight_normalization=False \
-#      weights_posterior=mfvi bias_posterior=mfvi \
-#      ood_data=svhn save_samples=True &
-#  done
-#done
-#wait
 
-# RealNVP CIFAR with different priors
-#for prior in gaussian student-t laplace; do
-#for prior in gaussian; do
-#  for lr in 0.01 0.001 0.0001; do
-#  for lr in 0.001; do
-#    srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
-#        python experiments/train.py with \
-#        posterior=realnvp \
-#        data=cifar10_augmented model=googleresnet weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
-#        n_samples=100 batch_size=128 lr=$lr epochs=400 \
-#        ood_data=svhn save_samples=True &
-#  done
-#done
-#wait
+# MNIST
+for weight_prior in gaussian; do
+  for bias_prior in gaussian; do
+    for weight_posterior in realnvp; do
+      for bias_posterior in pointwise; do
+        for lr in 0.001 0.0001 0.00001; do
+          srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
+            python experiments/train.py with \
+            data=mnist model=classificationconvnet \
+            weight_prior=$weight_prior weight_scale=1.41 bias_prior=$bias_prior \
+            weight_posterior=$weight_posterior bias_posterior=$bias_posterior \
+            kl_weight=0.0 \
+            realnvp_m=64 realnvp_num_layers=4 rezero_trick=True \
+            n_samples=100 batch_size=64 lr=$lr epochs=100 \
+            ood_data=fashion_mnist &
+        done
+      done
+    done
+  done
+done
 
-# RealNVP MNIST with different priors - same for both weights and biases
-#for prior in gaussian student-t laplace; do
-#  for lr in 0.01 0.001 0.0001; do
-#    srun --ntasks=1 --gpus=1 --mem-per-cpu=2G singularity exec $SINGULARITY_ARGS $SIF_PATH \
-#        python experiments/train.py with \
-#        posterior=realnvp \
-#        data=mnist model=classificationconvnet weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
-#        n_samples=100 batch_size=128 lr=$lr epochs=100 \
-#        ood_data=fashion_mnist save_samples=True &
-#  done
-#done
-#wait
-
-# CIFAR with different priors - same for both weights and biases
-#for prior in gaussian student-t laplace; do
-#  for lr in 0.01 0.001 0.0001; do
-#    srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train_mfvi.py with \
-#      data=cifar10_augmented model=googleresnet batchnorm=True \
-#      weight_prior=$prior weight_scale=1.41 bias_prior=$prior \
-#      n_samples=300 batch_size=128 lr=$lr epochs=400 \
-#      ood_data=svhn save_samples=True &
-#  done
-#done
-#wait
-
-# CIFAR with different priors - but always gaussian bias prior
-#for prior in gaussian student-t laplace; do
-#  for lr in 0.01 0.001 0.0001; do
-#    srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train_mfvi.py with \
-#      data=cifar10_augmented model=googleresnet batchnorm=True \
-#      weight_prior=$prior weight_scale=1.41 bias_prior=gaussian \
-#      n_samples=300 batch_size=128 lr=$lr epochs=400 \
-#      ood_data=svhn save_samples=True &
-#  done
-#done
-#wait
-
-# MNIST with different priors - same for both weights and biases
-#for prior in gaussian student-t laplace; do
-#  for lr in 0.1 0.01 0.001 0.0001; do
-#    srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
-#      data=mnist model=classificationconvnet weight_prior=$prior weight_scale=1.41 bias_prior=$prior  \
-#      n_samples=300 batch_size=128 lr=$lr epochs=100 \
-#      ood_data=fashion_mnist save_samples=True &
-#  done
-#done
-#wait
-
-# MNIST with different priors - but always gaussian bias prior
-#for prior in gaussian student-t laplace; do
-#  for lr in 0.1 0.01 0.001 0.0001; do
-#    srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
-#      data=mnist model=classificationconvnet weight_prior=$prior weight_scale=1.41 bias_prior=gaussian  \
-#      n_samples=300 batch_size=128 lr=$lr epochs=100 \
-#      ood_data=fashion_mnist save_samples=True &
-#  done
-#done
-#wait
-
-# MNIST 3 seeds for the best LRs
-#for seed in 1 2 3; do
-#  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
-#    data=mnist model=classificationconvnet weight_prior=gaussian weight_scale=1.41 bias_prior=gaussian  \
-#    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
-#    ood_data=fashion_mnist save_samples=True &
-#
-#  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
-#    data=mnist model=classificationconvnet weight_prior=laplace weight_scale=1.41 bias_prior=laplace  \
-#    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
-#    ood_data=fashion_mnist save_samples=True &
-#
-#  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
-#    data=mnist model=classificationconvnet weight_prior=laplace weight_scale=1.41 bias_prior=gaussian  \
-#    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
-#    ood_data=fashion_mnist save_samples=True &
-#
-#  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
-#    data=mnist model=classificationconvnet weight_prior=student-t weight_scale=1.41 bias_prior=student-t  \
-#    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
-#    ood_data=fashion_mnist save_samples=True &
-#
-#  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
-#    data=mnist model=classificationconvnet weight_prior=student-t weight_scale=1.41 bias_prior=gaussian  \
-#    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
-#    ood_data=fashion_mnist save_samples=True &
-#done
-#wait
-
-# MNIST with sigma stats logging
-#for seed in 1; do
-#  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
-#    data=mnist model=classificationconvnet weight_prior=gaussian weight_scale=1.41 bias_prior=gaussian  \
-#    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
-#    ood_data=fashion_mnist save_samples=True log_mfvi=True &
-#
-#  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
-#    data=mnist model=classificationconvnet weight_prior=laplace weight_scale=1.41 bias_prior=laplace  \
-#    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
-#    ood_data=fashion_mnist save_samples=True log_mfvi=True &
-#
-#  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
-#    data=mnist model=classificationconvnet weight_prior=laplace weight_scale=1.41 bias_prior=gaussian  \
-#    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
-#    ood_data=fashion_mnist save_samples=True log_mfvi=True &
-#
-#  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
-#    data=mnist model=classificationconvnet weight_prior=student-t weight_scale=1.41 bias_prior=student-t  \
-#    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
-#    ood_data=fashion_mnist save_samples=True log_mfvi=True &
-#
-#  srun --gres=gpu:1 singularity exec $SINGULARITY_ARGS $SIF_PATH python experiments/train.py with \
-#    data=mnist model=classificationconvnet weight_prior=student-t weight_scale=1.41 bias_prior=gaussian  \
-#    n_samples=300 batch_size=128 lr=0.001 epochs=100 \
-#    ood_data=fashion_mnist save_samples=True log_mfvi=True &
-#done
-#wait
+wait
