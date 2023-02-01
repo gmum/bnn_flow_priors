@@ -79,17 +79,19 @@ export PYTHONPATH=$PYTHONPATH:$PROJECT_PATH
 #done
 
 # MNIST
+#kl_weight="{'type':'linear','initial':0.0,'final':1.0}"
+kl_weight=0.01
 for weight_prior in gaussian; do
   for bias_prior in gaussian; do
     for weight_posterior in realnvp; do
-      for bias_posterior in pointwise; do
-        for lr in 0.001 0.0001 0.00001; do
+      for bias_posterior in realnvp; do
+        for lr in 0.001; do
           srun --ntasks=1 --gpus=1 singularity exec $SINGULARITY_ARGS $SIF_PATH \
             python experiments/train.py with \
             data=mnist model=classificationconvnet \
             weight_prior=$weight_prior weight_scale=1.41 bias_prior=$bias_prior \
             weight_posterior=$weight_posterior bias_posterior=$bias_posterior \
-            kl_weight=0.0 \
+            kl_weight=$kl_weight \
             realnvp_m=64 realnvp_num_layers=4 rezero_trick=True \
             n_samples=100 batch_size=64 lr=$lr epochs=100 \
             ood_data=fashion_mnist &

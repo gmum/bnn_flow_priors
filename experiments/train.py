@@ -471,6 +471,10 @@ def main():
                 evaluate_and_store_metrics(current_step, n_samples)
 
         _run.log_scalar("progress", 1.0, current_step)
+        #
+        _log_info(f"Model priors:")
+        for name, buffer in model.named_buffers():
+            _log_info(f"Prior for {name} = {buffer}")
         # save model
         state = model.state_dict()
         t.save(state, state_path)
